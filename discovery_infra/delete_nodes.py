@@ -6,17 +6,18 @@ import json
 import argparse
 import shutil
 from functools import partial
+from typing import Optional
 
-import assisted_service_api
-import consts
-import utils
-import oc_utils
-import virsh_cleanup
-from logger import log
+import discovery_infra.assisted_service_api as assisted_service_api
+import discovery_infra.consts as consts
+import discovery_infra.utils as utils
+import discovery_infra.oc_utils as oc_utils
+import discovery_infra.virsh_cleanup as virsh_cleanup
+from discovery_infra.logger import log
 
 
 @utils.on_exception(message='Failed to delete cluster', silent=True)
-def try_to_delete_cluster(namespace, tfvars):
+def try_to_delete_cluster(tfvars: dict, **kwargs):
     """ Try to delete cluster if assisted-service is up and such cluster
         exists.
     """
@@ -24,9 +25,8 @@ def try_to_delete_cluster(namespace, tfvars):
     if not cluster_id:
         return
 
-    args.namespace = namespace
     client = assisted_service_api.create_client(
-        url=utils.get_assisted_service_url_by_args(args=args, wait=False)
+        url=utils.get_assisted_service_url_by_args(wait=False, **kwargs)
     )
     client.delete_cluster(cluster_id=cluster_id)
 
@@ -79,19 +79,22 @@ def _delete_virsh_resources(*filters):
     message='Failed to delete clusters from namespaces',
     silent=True
 )
-def delete_clusters_from_all_namespaces():
-    for name, namespace in utils.get_all_namespaced_clusters():
-        args.profile = namespace
+def delete_clusters_from_all_namespaces(only_nodes: bool, namespace: str, profile: str, 
+                                        service_name: str, inventory_url: Optional[str], 
+                                        oc_mode: bool = False, oc_token: str = '', oc_server: str = '', oc_scheme: str = ''):
+    for cluster_name, namespace in utils.get_all_namespaced_clusters():
+        profile = namespace
         try:
-            args.profile = 'minikube'
-            delete_cluster(name, namespace)
+            profile = 'minikube'
+            delete_cluster(**locals())
         except:
-            args.profile = namespace
-            delete_cluster(name, namespace)
+            profile = namespace
+            delete_cluster(**locals())
 
 
 @utils.on_exception(message='Failed to delete cluster', silent=True)
-def delete_cluster(cluster_name, namespace):
+def delete_cluster(only_nodes: bool, cluster_name: str, namespace: str, profile: str, service_name: str, inventory_url: Optional[str], 
+                   oc_mode: bool = False, oc_token: str = '', oc_server: str = '', oc_scheme: str = ''):
     log.info(
         'Deleting cluster: %s in namespace: %s',
         cluster_name, namespace
@@ -100,8 +103,8 @@ def delete_cluster(cluster_name, namespace):
     tf_folder = utils.get_tf_folder(cluster_name, namespace)
     tfvars = utils.get_tfvars(tf_folder)
 
-    if not args.only_nodes:
-        try_to_delete_cluster(namespace, tfvars)
+    if not only_nodes:
+        try_to_delete_cluster(**locals())
     delete_nodes(cluster_name, namespace, tf_folder, tfvars)
 
 
@@ -116,7 +119,7 @@ def main():
         return
 
     if args.namespace == 'all':
-        delete_clusters_from_all_namespaces()
+        delete_clusters_from_all_namespaces(**args)
         return
 
     cluster_name = f'{args.cluster_name or consts.CLUSTER_PREFIX}-{args.namespace}'

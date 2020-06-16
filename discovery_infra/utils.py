@@ -9,16 +9,18 @@ import subprocess
 from pathlib import Path
 from functools import wraps
 from contextlib import contextmanager
+from typing import Optional
 
 import libvirt
 import waiting
 import requests
 import filelock
-import consts
-import oc_utils
-from logger import log
 from retry import retry
 from pprint import pformat
+
+import discovery_infra.consts as consts
+import discovery_infra.oc_utils as oc_utils
+from discovery_infra.logger import log
 
 conn = libvirt.open("qemu:///system")
 
@@ -61,8 +63,8 @@ def run_command_with_output(command):
         raise subprocess.CalledProcessError(p.returncode, p.args)
 
 
-def wait_till_nodes_are_ready(nodes_count, network_name):
-    log.info("Wait till %s nodes will be ready and have ips", nodes_count)
+def wait_till_nodes_are_ready(nodes_count: int, network_name: str):
+    log.info("Wait till %d nodes will be ready and have ips", nodes_count)
     try:
         waiting.wait(
             lambda: len(get_network_leases(network_name)) >= nodes_count,
@@ -252,24 +254,25 @@ def recreate_folder(folder, with_chmod=True, force_recreate=True):
         run_command("chmod -R ugo+rx %s" % folder)
 
 
-def get_assisted_service_url_by_args(args, wait=True):
-    if hasattr(args, 'inventory_url') and args.inventory_url:
-        return args.inventory_url
+def get_assisted_service_url_by_args(namespace: str, profile: str, service_name:str, inventory_url:Optional[str] = None, wait=True,
+    oc_mode: bool = False, oc_token: str = '', oc_server: str = '', oc_scheme: str = '', **kwargs):
+    if inventory_url:
+        return inventory_url
 
-    kwargs = {
-        'service': args.service_name,
-        'namespace': args.namespace
+    retry_args = {
+        'service': service_name,
+        'namespace': namespace
     }
-    if args.oc_mode:
+    if oc_mode:
         get_url = get_remote_assisted_service_url
-        kwargs['oc'] = oc_utils.get_oc_api_client(
-            token=args.oc_token,
-            server=args.oc_server
+        retry_args['oc'] = oc_utils.get_oc_api_client(
+            token=oc_token,
+            server=oc_server
         )
-        kwargs['scheme'] = args.oc_scheme
+        retry_args['scheme'] = oc_scheme
     else:
         get_url = get_local_assisted_service_url
-        kwargs['profile'] = args.profile
+        retry_args['profile'] = profile
 
     return retry(
         tries=5 if wait else 1,
@@ -280,7 +283,7 @@ def get_assisted_service_url_by_args(args, wait=True):
             requests.ConnectTimeout,
             requests.RequestException
         )
-    )(get_url)(**kwargs)
+    )(get_url)(**retry_args)
 
 
 def get_remote_assisted_service_url(oc, namespace, service, scheme):

@@ -12,6 +12,7 @@ volumes:
   - /var/lib/libvirt/dnsmasq/:/var/lib/libvirt/dnsmasq/
   - $HOME/.cache/libvirt/:$HOME/.cache/libvirt/
 env:
+  PATH: $PATH:$HOME/.local/bin
   PULL_SECRET: $PULL_SECRET
   NUM_WORKERS: $NUM_WORKERS
   SSH_PUB_KEY: $SSH_PUB_KEY

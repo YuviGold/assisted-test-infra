@@ -18,6 +18,7 @@ TEST_SECONDARY_NETWORK = "test-infra-secondary-network-"
 DEFAULT_CLUSTER_KUBECONFIG_PATH = "build/kubeconfig"
 WAIT_FOR_BM_API = 900
 NAMESPACE_POOL_SIZE = 15
+DEFAULT_BASE_DNS_DOMAIN = "redhat.com"
 
 
 class NodeRoles:

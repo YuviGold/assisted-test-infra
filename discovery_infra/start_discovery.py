@@ -9,19 +9,20 @@ import os
 import pprint
 import time
 import uuid
+import waiting
 from functools import partial
 from distutils.dir_util import copy_tree
 import distutils.util
 from pathlib import Path
 from netaddr import IPNetwork
 
-import assisted_service_api
-import consts
-import install_cluster
-import utils
-import oc_utils
-import waiting
-from logger import log
+import discovery_infra.assisted_service_api as assisted_service_api
+import discovery_infra.consts as consts
+import discovery_infra.install_cluster as install_cluster
+import discovery_infra.utils as utils
+import discovery_infra.oc_utils as oc_utils
+from discovery_infra.structs import Deployment
+from discovery_infra.logger import log
 
 
 # Creates ip list, if will be needed in any other place, please move to utils
@@ -63,7 +64,7 @@ def fill_tfvars(
     tfvars['libvirt_worker_ips'] = _create_ip_address_list(
         nodes_details['worker_count'], starting_ip_addr=worker_starting_ip
     )
-    tfvars['api_vip'] = _get_vips_ips()[0]
+    tfvars['api_vip'] = _get_vips_ips(nodes_details["machine_cidr"])[0]
     tfvars['libvirt_storage_pool_path'] = storage_path
     tfvars.update(nodes_details)
 
@@ -135,7 +136,7 @@ def create_nodes_and_wait_till_registered(
         tf_folder
         ):
     nodes_count = master_count + nodes_details["worker_count"]
-    create_nodes(
+    out, err, code = create_nodes(
         cluster_name=cluster_name,
         image_path=image_path,
         storage_path=storage_path,
@@ -148,21 +149,21 @@ def create_nodes_and_wait_till_registered(
     utils.wait_till_nodes_are_ready(
         nodes_count=nodes_count, network_name=nodes_details["libvirt_network_name"]
     )
-    if not inventory_client:
-        log.info("No inventory url, will not wait till nodes registration")
-        return
+    # if not inventory_client:
+    #     log.info("No inventory url, will not wait till nodes registration")
+    #     return
 
-    log.info("Wait till nodes will be registered")
-    waiting.wait(
-        lambda: utils.are_all_libvirt_nodes_in_cluster_hosts(
-            inventory_client, cluster.id, nodes_details["libvirt_network_name"]
-        ),
-        timeout_seconds=consts.NODES_REGISTERED_TIMEOUT,
-        sleep_seconds=10,
-        waiting_for="Nodes to be registered in inventory service",
-    )
-    log.info("Registered nodes are:")
-    pprint.pprint(inventory_client.get_cluster_hosts(cluster.id))
+    # log.info("Wait till nodes will be registered")
+    # waiting.wait(
+    #     lambda: utils.are_all_libvirt_nodes_in_cluster_hosts(
+    #         inventory_client, cluster.id, nodes_details["libvirt_network_name"]
+    #     ),
+    #     timeout_seconds=consts.NODES_REGISTERED_TIMEOUT,
+    #     sleep_seconds=10,
+    #     waiting_for="Nodes to be registered in inventory service",
+    # )
+    # log.info("Registered nodes are:")
+    # pprint.pprint(inventory_client.get_cluster_hosts(cluster.id))
 
 
 # Set nodes roles by vm name
@@ -188,9 +189,9 @@ def set_hosts_roles(client, cluster_id, network_name):
     client.set_hosts_roles(cluster_id=cluster_id, hosts_with_roles=added_hosts)
 
 
-def set_cluster_vips(client, cluster_id):
+def set_cluster_vips(client, cluster_id, vm_network_cidr):
     cluster_info = client.cluster_get(cluster_id)
-    api_vip, ingress_vip = _get_vips_ips()
+    api_vip, ingress_vip = _get_vips_ips(vm_network_cidr)
     cluster_info.vip_dhcp_allocation = False
     cluster_info.api_vip = api_vip
     cluster_info.ingress_vip = ingress_vip
@@ -204,10 +205,10 @@ def set_cluster_machine_cidr(client, cluster_id, machine_cidr):
     client.update_cluster(cluster_id, cluster_info)
 
 
-def _get_vips_ips():
+def _get_vips_ips(vm_network_cidr):
     network_subnet_starting_ip = str(
         ipaddress.ip_address(
-            ipaddress.IPv4Network(args.vm_network_cidr).network_address
+            ipaddress.IPv4Network(vm_network_cidr).network_address
         )
         + 100
     )
@@ -236,28 +237,31 @@ def _cluster_create_params():
 
 
 # convert params from args to terraform tfvars
-def _create_node_details(cluster_name):
+def _create_node_details(deployment: Deployment, cluster_name, base_dns_domain, 
+                         vm_network_cidr, network_bridge, network_mtu,
+                         master_disk, master_memory,
+                         worker_disk, worker_memory):
     return {
-        "libvirt_worker_memory": args.worker_memory,
-        "libvirt_master_memory": args.master_memory,
-        "worker_count": args.number_of_workers,
+        "libvirt_worker_memory": worker_memory,
+        "libvirt_master_memory": master_memory,
+        "worker_count": deployment.worker_count,
         "cluster_name": cluster_name,
-        "cluster_domain": args.base_dns_domain,
-        "machine_cidr": args.vm_network_cidr,
-        "libvirt_network_name": consts.TEST_NETWORK + args.namespace,
-        "libvirt_network_mtu": args.network_mtu,
-        "libvirt_network_if": args.network_bridge,
-        "libvirt_worker_disk": args.worker_disk,
-        "libvirt_master_disk": args.master_disk,
-        'libvirt_secondary_network_name': consts.TEST_SECONDARY_NETWORK + args.namespace,
-        'libvirt_secondary_network_if': f's{args.network_bridge}',
-        'provisioning_cidr': _get_provisioning_cidr(),
+        "cluster_domain": base_dns_domain,
+        "machine_cidr": vm_network_cidr,
+        "libvirt_network_name": consts.TEST_NETWORK + deployment.namespace,
+        "libvirt_network_mtu": network_mtu,
+        "libvirt_network_if": network_bridge,
+        "libvirt_worker_disk": worker_disk,
+        "libvirt_master_disk": master_disk,
+        'libvirt_secondary_network_name': consts.TEST_SECONDARY_NETWORK + deployment.namespace,
+        'libvirt_secondary_network_if': f's{network_bridge}',
+        'provisioning_cidr': _get_provisioning_cidr(vm_network_cidr, deployment.namespace_index),
     }
 
 
-def _get_provisioning_cidr():
-    provisioning_cidr = IPNetwork(args.vm_network_cidr)
-    provisioning_cidr += args.ns_index + consts.NAMESPACE_POOL_SIZE
+def _get_provisioning_cidr(vm_network_cidr, ns_index):
+    provisioning_cidr = IPNetwork(vm_network_cidr)
+    provisioning_cidr += ns_index + consts.NAMESPACE_POOL_SIZE
     return str(provisioning_cidr)
 
 
@@ -293,12 +297,11 @@ def validate_dns(client, cluster_id):
 
 # Create vms from downloaded iso that will connect to assisted-service and register
 # If install cluster is set , it will run install cluster command and wait till all nodes will be in installing status
-def nodes_flow(client, cluster_name, cluster, image_path):
-    nodes_details = _create_node_details(cluster_name)
+def nodes_flow(deployment: Deployment, client, cluster_name: str, cluster, nodes_details: dict, image_path: str):
     if cluster:
         nodes_details["cluster_inventory_id"] = cluster.id
 
-    tf_folder = utils.get_tf_folder(cluster_name, args.namespace)
+    tf_folder = utils.get_tf_folder(cluster_name, deployment.namespace)
     utils.recreate_folder(tf_folder)
     copy_tree(consts.TF_TEMPLATE, tf_folder)
 
@@ -307,8 +310,8 @@ def nodes_flow(client, cluster_name, cluster, image_path):
         inventory_client=client,
         cluster=cluster,
         image_path=image_path,
-        storage_path=args.storage_path,
-        master_count=args.master_count,
+        storage_path=deployment.storage_pool_path,
+        master_count=deployment.master_count,
         nodes_details=nodes_details,
         tf_folder=tf_folder
     )
@@ -329,9 +332,9 @@ def nodes_flow(client, cluster_name, cluster, image_path):
             )
 
             if args.vip_dhcp_allocation:
-                set_cluster_machine_cidr(client, cluster.id, args.vm_network_cidr)
+                set_cluster_machine_cidr(client, cluster.id, nodes_details["machine_cidr"])
             else:
-                set_cluster_vips(client, cluster.id)
+                set_cluster_vips(client, cluster.id, nodes_details["machine_cidr"])
         else:
             log.info("VIPs already configured")
 
@@ -345,83 +348,14 @@ def nodes_flow(client, cluster_name, cluster, image_path):
         log.info("Printing after setting roles")
         pprint.pprint(client.get_cluster_hosts(cluster.id))
 
-        if args.install_cluster:
-            time.sleep(10)
-            install_cluster.run_install_flow(
-                client=client,
-                cluster_id=cluster.id,
-                kubeconfig_path=consts.DEFAULT_CLUSTER_KUBECONFIG_PATH,
-                pull_secret=args.pull_secret,
-            )
-            # Validate DNS domains resolvability
-            validate_dns(client, cluster.id)
 
-
-def main():
-    client = None
-    cluster = {}
-
-    internal_cluster_name = f'{args.cluster_name or consts.CLUSTER_PREFIX}-{args.namespace}'
-    log.info('Cluster name: %s', internal_cluster_name)
-
-    if args.managed_dns_domains:
-        args.base_dns_domain = args.managed_dns_domains.split(":")[0]
-
-    if not args.vm_network_cidr:
-        net_cidr = IPNetwork('192.168.126.0/24')
-        net_cidr += args.ns_index
-        args.vm_network_cidr = str(net_cidr)
-
-    if not args.network_bridge:
-        args.network_bridge = f'tt{args.ns_index}'
-
-    image_path = None
-
-    # If image is passed, there is no need to create cluster and download image, need only to spawn vms with is image
-    if not args.image:
-        utils.recreate_folder(consts.IMAGE_FOLDER, force_recreate=False)
-        client = assisted_service_api.create_client(
-            url=utils.get_assisted_service_url_by_args(args=args)
-        )
-        if args.cluster_id:
-            cluster = client.cluster_get(cluster_id=args.cluster_id)
-        else:
-            random_postfix = str(uuid.uuid4())[:8]
-            ui_cluster_name = internal_cluster_name + f'-{random_postfix}'
-            log.info('Cluster name on UI: %s', ui_cluster_name)
-
-            cluster = client.create_cluster(
-                ui_cluster_name, ssh_public_key=args.ssh_key, **_cluster_create_params()
-            )
-
-        image_path = os.path.join(
-            consts.IMAGE_FOLDER,
-            f'{args.namespace}-installer-image.iso'
-        )
-        client.generate_and_download_image(
-            cluster_id=cluster.id,
-            image_path=image_path,
-            ssh_key=args.ssh_key,
-        )
-
-    # Iso only, cluster will be up and iso downloaded but vm will not be created
-    if not args.iso_only:
-        try:
-            nodes_flow(client, internal_cluster_name, cluster, args.image or image_path)
-        finally:
-            if not image_path or args.keep_iso:
-                return
-            log.info('deleting iso: %s', image_path)
-            os.unlink(image_path)
-
-
-if __name__ == "__main__":
+def handle_arguments():
     parser = argparse.ArgumentParser(description="Run discovery flow")
     parser.add_argument(
         "-i", "--image", help="Run terraform with given image", type=str, default=""
     )
     parser.add_argument(
-        "-n", "--master-count", help="Masters count to spawn", type=int, default=3
+        "-n", "--master-count", help="Masters count to spawn", type=int, default=consts.NUMBER_OF_MASTERS
     )
     parser.add_argument(
         "-p",
@@ -493,7 +427,7 @@ if __name__ == "__main__":
         "--base-dns-domain",
         help="Base dns domain",
         type=str,
-        default="redhat.com",
+        default=consts.DEFAULT_BASE_DNS_DOMAIN,
     )
     parser.add_argument(
         "-mD",
@@ -608,4 +542,87 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if not args.pull_secret and args.install_cluster:
         raise Exception("Can't install cluster without pull secret, please provide one")
+
+    return args
+
+
+def main():
+    args = handle_arguments()
+    client = None
+    cluster = {}
+    deployment = Deployment(namespace=args.namespace, namespace_index=args.ns_index,
+                            storage_pool_path=args.storage_path, master_count=args.master_count,
+                            worker_count=args.number_of_workers)
+
+    internal_cluster_name = f'{args.cluster_name or consts.CLUSTER_PREFIX}-{deployment.namespace}'
+    log.info('Cluster name: %s', internal_cluster_name)
+
+    if args.managed_dns_domains:
+        args.base_dns_domain = args.managed_dns_domains.split(":")[0]
+
+    if not args.vm_network_cidr:
+        net_cidr = IPNetwork('192.168.126.0/24')
+        net_cidr += args.ns_index
+        args.vm_network_cidr = str(net_cidr)
+
+    if not args.network_bridge:
+        args.network_bridge = f'tt{args.ns_index}'
+
+    image_path = None
+
+    # If image is passed, there is no need to create cluster and download image, need only to spawn vms with is image
+    if not args.image:
+        utils.recreate_folder(consts.IMAGE_FOLDER, force_recreate=False)
+        client = assisted_service_api.create_client(
+            url=utils.get_assisted_service_url_by_args(**args)
+        )
+        if args.cluster_id:
+            cluster = client.cluster_get(cluster_id=args.cluster_id)
+        else:
+            random_postfix = str(uuid.uuid4())[:8]
+            ui_cluster_name = internal_cluster_name + f'-{random_postfix}'
+            log.info('Cluster name on UI: %s', ui_cluster_name)
+
+            cluster = client.create_cluster(
+                ui_cluster_name, ssh_public_key=args.ssh_key, **_cluster_create_params()
+            )
+
+        image_path = os.path.join(
+            consts.IMAGE_FOLDER,
+            f'{deployment.namespace}-installer-image.iso'
+        )
+        client.generate_and_download_image(
+            cluster_id=cluster.id,
+            image_path=image_path,
+            ssh_key=args.ssh_key,
+        )
+
+    # Iso only, cluster will be up and iso downloaded but vm will not be created
+    if not args.iso_only:
+        try:
+            nodes_details = _create_node_details(deployment, internal_cluster_name, args.base_dns_domain,
+                                        args.vm_network_cidr, args.network_bridge, args.network_mtu,
+                                        args.master_disk, args.master_memory,
+                                        args.worker_disk, args.worker_memory)
+            nodes_flow(deployment, client, internal_cluster_name, cluster, nodes_details, args.image or image_path)
+
+            if client and args.install_cluster:
+                time.sleep(10)
+                install_cluster.run_install_flow(
+                    client=client,
+                    cluster_id=cluster.id,
+                    kubeconfig_path=consts.DEFAULT_CLUSTER_KUBECONFIG_PATH,
+                    pull_secret=args.pull_secret,
+                )
+                # Validate DNS domains resolvability
+                validate_dns(client, cluster.id)
+
+        finally:
+            if not image_path or args.keep_iso:
+                return
+            log.info('deleting iso: %s', image_path)
+            os.unlink(image_path)
+
+
+if __name__ == "__main__":
     main()

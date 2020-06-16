@@ -4,9 +4,8 @@
 import argparse
 import subprocess
 
-import utils
-
-from logger import log
+from discovery_infra.utils import file_lock_context
+from discovery_infra.logger import log
 
 DEFAULT_SKIP_LIST = ["default"]
 
@@ -78,7 +77,7 @@ def clean_networks(skip_list, resource_filter):
 
 
 def clean_virsh_resources(skip_list, resource_filter):
-    with utils.file_lock_context():
+    with file_lock_context():
         clean_domains(skip_list, resource_filter)
         clean_pools(skip_list, resource_filter)
         clean_networks(skip_list, resource_filter)

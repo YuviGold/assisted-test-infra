@@ -15,7 +15,7 @@ export PROFILE=${PROFILE:-assisted-installer}
 mkdir -p build
 
 print_log "Updating assisted_service params"
-skipper run discovery-infra/update_assisted_service_cm.py ENABLE_AUTH=${ENABLE_AUTH}
+skipper run discovery_infra/update_assisted_service_cm.py ENABLE_AUTH=${ENABLE_AUTH}
 skipper run "make -C assisted-service/ deploy-all" ${SKIPPER_PARAMS} DEPLOY_TAG=${DEPLOY_TAG} DEPLOY_MANIFEST_PATH=${DEPLOY_MANIFEST_PATH} DEPLOY_MANIFEST_TAG=${DEPLOY_MANIFEST_TAG} NAMESPACE=${NAMESPACE} ENABLE_AUTH=${ENABLE_AUTH} PROFILE=${PROFILE}
 
 print_log "Wait till ${SERVICE_NAME} api is ready"

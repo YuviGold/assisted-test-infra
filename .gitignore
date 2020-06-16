@@ -7,3 +7,6 @@ minikube
 *.log
 **/RCS/**
 *~
+.hypothesis
+*.egg-info/
+dist

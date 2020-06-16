@@ -4,13 +4,14 @@ import os
 import base64
 import requests
 import time
-
-import consts
-import utils
 import shutil
 import waiting
+
 from assisted_service_client import ApiClient, Configuration, api, models
-from logger import log
+
+import discovery_infra.consts as consts
+import discovery_infra.utils as utils
+from discovery_infra.logger import log
 
 
 class InventoryClient(object):

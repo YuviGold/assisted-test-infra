@@ -120,7 +120,7 @@ start_minikube:
 delete_minikube:
 	python3 scripts/indexer.py --action del --namespace all $(OC_FLAG)
 	minikube delete --all
-	skipper run discovery-infra/virsh_cleanup.py -m
+	skipper run discovery_infra/virsh_cleanup.py -m
 
 delete_minikube_profile:
 	python3 scripts/indexer.py --action del --namespace $(NAMESPACE) $(OC_FLAG)
@@ -148,7 +148,7 @@ destroy_terraform:
 
 _destroy_terraform:
 	cd build/terraform/  && terraform destroy -auto-approve -input=false -state=terraform.tfstate -state-out=terraform.tfstate -var-file=terraform.tfvars.json || echo "Failed cleanup terraform"
-	discovery-infra/virsh_cleanup.py -f test-infra
+	discovery_infra/virsh_cleanup.py -f test-infra
 
 #######
 # Run #
@@ -187,7 +187,7 @@ kill_all_port_forwardings:
 ###########
 
 _install_cluster:
-	discovery-infra/install_cluster.py -id $(CLUSTER_ID) -ps '$(PULL_SECRET)' --service-name $(SERVICE_NAME) $(OC_PARAMS) -ns $(NAMESPACE) -cn $(CLUSTER_NAME) --profile $(PROFILE)
+	discovery_infra/install_cluster.py -id $(CLUSTER_ID) -ps '$(PULL_SECRET)' --service-name $(SERVICE_NAME) $(OC_PARAMS) -ns $(NAMESPACE) -cn $(CLUSTER_NAME) --profile $(PROFILE)
 
 install_cluster:
 	skipper make $(SKIPPER_PARAMS) _install_cluster NAMESPACE=$(NAMESPACE)
@@ -198,7 +198,8 @@ install_cluster:
 #########
 
 _deploy_nodes:
-	discovery-infra/start_discovery.py -i $(ISO) -n $(NUM_MASTERS) -p $(STORAGE_POOL_PATH) -k '$(SSH_PUB_KEY)' -md $(MASTER_DISK) -wd $(WORKER_DISK) -mm $(MASTER_MEMORY) -wm $(WORKER_MEMORY) -nw $(NUM_WORKERS) -ps '$(PULL_SECRET)' -bd $(BASE_DOMAIN) -cN $(CLUSTER_NAME) -vN $(NETWORK_CIDR) -nM $(NETWORK_MTU) -ov $(OPENSHIFT_VERSION) -iU $(REMOTE_SERVICE_URL) -id $(CLUSTER_ID) -mD $(BASE_DNS_DOMAINS) -ns $(NAMESPACE) -pX $(HTTP_PROXY_URL) -sX $(HTTPS_PROXY_URL) -nX $(NO_PROXY_VALUES) --service-name $(SERVICE_NAME) --vip-dhcp-allocation $(VIP_DHCP_ALLOCATION) --profile $(PROFILE) --ns-index $(NAMESPACE_INDEX) $(OC_PARAMS) $(KEEP_ISO_FLAG) $(ADDITIONAL_PARAMS)
+	pip3 install --user ./dist/*
+	test_infra -i $(ISO) -n $(NUM_MASTERS) -p $(STORAGE_POOL_PATH) -k '$(SSH_PUB_KEY)' -md $(MASTER_DISK) -wd $(WORKER_DISK) -mm $(MASTER_MEMORY) -wm $(WORKER_MEMORY) -nw $(NUM_WORKERS) -ps '$(PULL_SECRET)' -bd $(BASE_DOMAIN) -cN $(CLUSTER_NAME) -vN $(NETWORK_CIDR) -nM $(NETWORK_MTU) -ov $(OPENSHIFT_VERSION) -iU $(REMOTE_SERVICE_URL) -id $(CLUSTER_ID) -mD $(BASE_DNS_DOMAINS) -ns $(NAMESPACE) -pX $(HTTP_PROXY_URL) -sX $(HTTPS_PROXY_URL) -nX $(NO_PROXY_VALUES) --service-name $(SERVICE_NAME) --vip-dhcp-allocation $(VIP_DHCP_ALLOCATION) --profile $(PROFILE) --ns-index $(NAMESPACE_INDEX) $(OC_PARAMS) $(KEEP_ISO_FLAG) $(ADDITIONAL_PARAMS)
 
 deploy_nodes_with_install:
 	skipper make $(SKIPPER_PARAMS) _deploy_nodes NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) NAMESPACE=$(NAMESPACE) ADDITIONAL_PARAMS=-in $(SKIPPER_PARAMS)
@@ -207,10 +208,10 @@ deploy_nodes:
 	skipper make $(SKIPPER_PARAMS) _deploy_nodes NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) NAMESPACE=$(NAMESPACE)
 
 destroy_nodes:
-	skipper run $(SKIPPER_PARAMS) 'discovery-infra/delete_nodes.py -iU $(REMOTE_SERVICE_URL) -id $(CLUSTER_ID) -ns $(NAMESPACE) --service-name $(SERVICE_NAME) --profile $(PROFILE) -cn $(CLUSTER_NAME) $(OC_PARAMS)'
+	skipper run $(SKIPPER_PARAMS) 'discovery_infra/delete_nodes.py -iU $(REMOTE_SERVICE_URL) -id $(CLUSTER_ID) -ns $(NAMESPACE) --service-name $(SERVICE_NAME) --profile $(PROFILE) -cn $(CLUSTER_NAME) $(OC_PARAMS)'
 
 destroy_all_nodes:
-	skipper run $(SKIPPER_PARAMS) 'discovery-infra/delete_nodes.py -iU $(REMOTE_SERVICE_URL) -id $(CLUSTER_ID) -cn $(CLUSTER_NAME) --service-name $(SERVICE_NAME) $(OC_PARAMS) -ns all'
+	skipper run $(SKIPPER_PARAMS) 'discovery_infra/delete_nodes.py -iU $(REMOTE_SERVICE_URL) -id $(CLUSTER_ID) -cn $(CLUSTER_NAME) --service-name $(SERVICE_NAME) $(OC_PARAMS) -ns all'
 
 redeploy_nodes: destroy_nodes deploy_nodes
 
@@ -231,7 +232,7 @@ deploy_monitoring: bring_assisted_service
 	make -C assisted-service/ deploy-monitoring NAMESPACE=$(NAMESPACE) PROFILE=$(PROFILE)
 
 delete_all_virsh_resources: destroy_all_nodes delete_minikube kill_all_port_forwardings
-	skipper run $(SKIPPER_PARAMS) 'discovery-infra/delete_nodes.py -ns $(NAMESPACE) -a'
+	skipper run $(SKIPPER_PARAMS) 'discovery_infra/delete_nodes.py -ns $(NAMESPACE) -a'
 
 
 #######
@@ -239,7 +240,7 @@ delete_all_virsh_resources: destroy_all_nodes delete_minikube kill_all_port_forw
 #######
 
 _download_iso:
-	discovery-infra/start_discovery.py -k '$(SSH_PUB_KEY)'  -ps '$(PULL_SECRET)' -bd $(BASE_DOMAIN) -cN $(CLUSTER_NAME) -ov $(OPENSHIFT_VERSION) -pX $(HTTP_PROXY_URL) -sX $(HTTPS_PROXY_URL) -nX $(NO_PROXY_VALUES) -iU $(REMOTE_SERVICE_URL) -id $(CLUSTER_ID) -mD $(BASE_DNS_DOMAINS) -ns $(NAMESPACE) --service-name $(SERVICE_NAME) --profile $(PROFILE) --ns-index $(NAMESPACE_INDEX) $(OC_PARAMS) -iO
+	discovery_infra/start_discovery.py -k '$(SSH_PUB_KEY)'  -ps '$(PULL_SECRET)' -bd $(BASE_DOMAIN) -cN $(CLUSTER_NAME) -ov $(OPENSHIFT_VERSION) -pX $(HTTP_PROXY_URL) -sX $(HTTPS_PROXY_URL) -nX $(NO_PROXY_VALUES) -iU $(REMOTE_SERVICE_URL) -id $(CLUSTER_ID) -mD $(BASE_DNS_DOMAINS) -ns $(NAMESPACE) --service-name $(SERVICE_NAME) --profile $(PROFILE) --ns-index $(NAMESPACE_INDEX) $(OC_PARAMS) -iO
 
 download_iso:
 	skipper make $(SKIPPER_PARAMS) _download_iso NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) NAMESPACE=$(NAMESPACE)
@@ -257,3 +258,9 @@ lint:
 
 _lint:
 	pre-commit run --all-files
+
+test:
+	skipper make _test
+
+_test:
+	python3 -m pytest tests --verbose -s

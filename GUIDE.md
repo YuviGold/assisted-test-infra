@@ -183,7 +183,7 @@ make run
 
 **Problem**
 
-An exception in `discovery-infra/assisted_service_client.py` about a missing class or an invalid parameter.
+An exception in `discovery_infra/assisted_service_client.py` about a missing class or an invalid parameter.
 
 **Solution**
 

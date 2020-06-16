@@ -13,7 +13,6 @@
 # Hence, in order to support unset env vars, avoid override in Makefile.
 
 import os
-
 import yaml
 
 CM_PATH = "assisted-service/deploy/assisted-service-configmap.yaml"

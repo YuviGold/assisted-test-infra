@@ -3,13 +3,13 @@
 
 import os
 import argparse
-
-import assisted_service_api
-import consts
-import utils
-import oc_utils
 import waiting
-from logger import log
+
+import discovery_infra.assisted_service_api as assisted_service_api
+import discovery_infra.consts as consts
+import discovery_infra.utils as utils
+import discovery_infra.oc_utils as oc_utils
+from discovery_infra.logger import log
 
 
 # Verify folder to download kubeconfig exists. If will be needed in other places move to utils
@@ -140,8 +140,8 @@ def main():
 
     client = assisted_service_api.create_client(
         url=utils.get_assisted_service_url_by_args(
-            args=args,
-            wait=False
+            wait=False,
+            **args
         )
     )
     run_install_flow(

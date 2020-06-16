@@ -1,17 +1,31 @@
 # -*- coding: utf-8 -*-
 import logging
 import sys
+import re
+
+
+class SensitiveFormatter(logging.Formatter):
+    """Formatter that removes sensitive pull secret."""
+    @staticmethod
+    def _filter(s):
+        return re.sub(r"('_pull_secret':\s+)'(.*?)'", r"\g<1>'*** PULL_SECRET ***'", s)
+
+
+    def format(self, record):
+        original = logging.Formatter.format(self, record)
+        return self._filter(original)
+
 
 logging.getLogger("requests").setLevel(logging.ERROR)
 logging.getLogger("urllib3").setLevel(logging.ERROR)
 
 log = logging.getLogger("")
 log.setLevel(logging.DEBUG)
-format = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+format = SensitiveFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 ch = logging.StreamHandler(sys.stdout)
 ch.setFormatter(
-    logging.Formatter(
+    SensitiveFormatter(
         "%(asctime)s %(levelname)-10s %(message)s \t" "(%(pathname)s:%(lineno)d)"
     )
 )
