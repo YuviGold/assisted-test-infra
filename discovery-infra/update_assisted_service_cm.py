@@ -36,6 +36,7 @@ ENVS = [
     ("HARDWARE_INFO_IMAGE", ""),
     ("INVENTORY_IMAGE", ""),
     ("OCM_BASE_URL", ""),
+    ("OPENSHIFT_INSTALL_RELEASE_IMAGE", ""),
 ]
 
 

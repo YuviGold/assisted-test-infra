@@ -8,6 +8,7 @@ pipeline {
         string(name: 'SERVICE', defaultValue: 'quay.io/ocpmetal/assisted-service:latest', description: 'assisted-service image to use for test')
         string(name: 'SERVICE_BRANCH', defaultValue: 'master', description: 'assisted-service branch')
         string(name: 'SERVICE_REPO', defaultValue: 'https://github.com/openshift/assisted-service', description: 'assisted service repository')
+        string(name: 'OPENSHIFT_INSTALL_RELEASE_IMAGE', defaultValue: '', description: 'OpenShift image')
         string(name: 'IGNITION_GENERATE_IMAGE', defaultValue: '', description: 'assisted-ignition-generator image')
         string(name: 'INSTALLER_IMAGE', defaultValue: '', description: 'installer image to use')
         string(name: 'DEPLOY_TAG', defaultValue: '', description: 'Deploy tag')
