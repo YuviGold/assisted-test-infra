@@ -167,6 +167,10 @@ validate_namespace:
 
 run: validate_namespace deploy_assisted_service deploy_ui
 
+run_poisioned: destroy
+	export PROBABILITY=50 && $(MAKE) run SERVICE_BASE_URL=http://$(shell hostname --ip-address):3000
+	$(MAKE) deploy_nodes_with_install
+
 run_full_flow: run deploy_nodes set_dns
 
 redeploy_all: destroy run_full_flow

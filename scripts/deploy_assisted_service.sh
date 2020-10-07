@@ -11,6 +11,8 @@ export SERVICE_PORT=$(( 6000 + $NAMESPACE_INDEX ))
 export SERVICE_BASE_URL=${SERVICE_BASE_URL:-"http://${SERVICE_URL}:${SERVICE_PORT}"}
 export EXTERNAL_PORT=${EXTERNAL_PORT:-y}
 export PROFILE=${PROFILE:-assisted-installer}
+PROBABILITY=${PROBABILITY:-0}
+SERVICE_URL=$(minikube -p $(PROFILE) ip):$(get_service_port ${SERVICE_NAME} ${NAMESPACE} ${PROFILE})
 
 mkdir -p build
 
@@ -22,6 +24,8 @@ print_log "Wait till ${SERVICE_NAME} api is ready"
 wait_for_url_and_run "$(minikube service ${SERVICE_NAME} --url -p $PROFILE -n ${NAMESPACE})" "echo \"waiting for ${SERVICE_NAME}\""
 
 add_firewalld_port $SERVICE_PORT
+
+node ./toxy/service.js ${SERVICE_URL} ${PROBABILITY}
 
 print_log "Starting port forwarding for deployment/${SERVICE_NAME} on port $SERVICE_PORT"
 wait_for_url_and_run ${SERVICE_BASE_URL} "spawn_port_forwarding_command $SERVICE_NAME $SERVICE_PORT $NAMESPACE $NAMESPACE_INDEX $PROFILE"

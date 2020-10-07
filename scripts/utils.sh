@@ -49,7 +49,7 @@ service ${service_name}
   protocol	= tcp
   user		= root
   wait		= no
-  redirect	= $(minikube -p $profile ip) $(kubectl --server $(get_profile_url $profile) --kubeconfig=${KUBECONFIG} get svc/${service_name} -n ${NAMESPACE} -o=jsonpath='{.spec.ports[0].nodePort}')
+  redirect	= $(minikube -p $profile ip) $(get_service_port ${service_name} ${NAMESPACE} ${profile})
   port		= ${external_port}
   only_from	= 0.0.0.0/0
   per_source	= UNLIMITED
@@ -58,6 +58,13 @@ service ${service_name}
 EOF
     sudo mv build/xinetd-$filename /etc/xinetd.d/$filename --force
     sudo systemctl restart xinetd
+}
+
+function get_service_port() {
+    service_name=$1
+    namespace=$2
+    profile=$3
+    echo "$(kubectl --server $(get_profile_url ${profile}) --kubeconfig=${KUBECONFIG} get svc/${service_name} -n ${namespace} -o=jsonpath='{.spec.ports[0].nodePort}')"
 }
 
 function run_in_background() {
