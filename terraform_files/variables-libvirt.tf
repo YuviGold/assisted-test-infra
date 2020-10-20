@@ -134,3 +134,10 @@ variable "libvirt_master_disk" {
   description = "Disk size in bytes allocated to master"
   default     = "21474836480"
 }
+
+variable "running" {
+  type        = bool
+  description = "Start vms"
+  default     = true
+}
+
