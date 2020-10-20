@@ -1,6 +1,7 @@
 import os
 import pytest
 import logging
+import yaml
 
 from test_infra import utils
 from test_infra import consts
@@ -190,3 +191,7 @@ class BaseTest:
             nodes_count=env_variables['NUM_NODES'],
             timeout=timeout,
         )
+
+    @staticmethod
+    def get_cluster_install_config(cluster_id, api_client):
+        return yaml.load(api_client.get_cluster_install_config(cluster_id), Loader=yaml.SafeLoader)

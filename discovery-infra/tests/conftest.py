@@ -27,7 +27,9 @@ env_variables = {"SSH_PUBLIC_KEY": utils.get_env('SSH_PUB_KEY'),
                  "WORKER_DISK": int(utils.get_env('WORKER_DISK', '21474836480')),
                  "MASTER_DISK": int(utils.get_env('WORKER_DISK', '128849018880')),
                  "STORAGE_POOL_PATH": utils.get_env('STORAGE_POOL_PATH', os.path.join(os.getcwd(), "storage_pool")),
-                 "CLUSTER_NAME": utils.get_env('CLUSTER_NAME', f'{consts.CLUSTER_PREFIX}')}
+                 "CLUSTER_NAME": utils.get_env('CLUSTER_NAME', f'{consts.CLUSTER_PREFIX}'),
+                 "HTTP_PROXY": utils.get_env('HTTP_PROXY'),
+                 "HTTPS_PROXY": utils.get_env('HTTP_PROXY')}
 
 image = utils.get_env('ISO',
                       os.path.join(consts.IMAGE_FOLDER, f'{env_variables["CLUSTER_NAME"]}-installer-image.iso')).strip()
