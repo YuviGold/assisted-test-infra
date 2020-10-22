@@ -20,9 +20,6 @@ class TerraformController(LibvirtController):
         self.tf_folder = self._create_tf_folder()
         self.image_path = kwargs["iso_download_path"]
 
-    def __del__(self):
-        self.destroy_all_nodes()
-
     def _create_tf_folder(self):
         tf_folder = utils.get_tf_folder(self.cluster_name)
         logging.info("Creating %s as terraform folder", tf_folder)
@@ -148,16 +145,7 @@ class TerraformController(LibvirtController):
 
     def format_node_disk(self, node_name):
         logging.info("Formating disk for %s", node_name)
-        disk_path = f'{self.params.libvirt_storage_pool_path}/{self.cluster_name}/{node_name}'
-        if not os.path.exists(disk_path):
-            logging.info("")
-
-        command = f"qemu-img info {self.params.libvirt_storage_pool_path}/{self.cluster_name}/{node_name} | grep 'virtual size'"
-        output = utils.run_command(command, shell=True)
-        image_size = output[0].split(' ')[2]
-
-        command = f'qemu-img create -f qcow2 {self.params.libvirt_storage_pool_path}/{self.cluster_name}/{node_name} {image_size}'
-        utils.run_command(command, shell=True)
+        self.format_disk(f'{self.params.libvirt_storage_pool_path}/{self.cluster_name}/{node_name}')
 
     def get_ingress_and_api_vips(self):
         network_subnet_starting_ip = str(
@@ -218,6 +206,7 @@ class TerraformController(LibvirtController):
         self._delete_virsh_resources()
         if not os.path.exists(self.image_path):
             utils.recreate_folder(os.path.dirname(self.image_path), force_recreate=False)
+            # if file not exist lets create dummy
             utils.touch(self.image_path)
 
         self.params.running = False
