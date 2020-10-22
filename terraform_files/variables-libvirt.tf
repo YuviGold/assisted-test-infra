@@ -137,7 +137,7 @@ variable "libvirt_master_disk" {
 
 variable "running" {
   type        = bool
-  description = "Start vms"
+  description = "Power on vms or not"
   default     = true
 }
 

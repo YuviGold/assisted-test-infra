@@ -76,4 +76,3 @@ class LibvirtController(NodeController):
         logging.info("Delete all the nodes")
         self.shutdown_all_nodes()
         self.format_all_node_disks()
-        pass

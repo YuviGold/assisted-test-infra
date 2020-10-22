@@ -12,7 +12,8 @@ else:
     from test_infra.controllers.node_controllers.terraform_controller import TerraformController as nodeController
 
 env_variables = {"SSH_PUBLIC_KEY": utils.get_env('SSH_PUB_KEY'),
-                 "REMOTE_SERVICE_URL": utils.get_env('REMOTE_SERVICE_URL'), "PULL_SECRET": utils.get_env('PULL_SECRET'),
+                 "REMOTE_SERVICE_URL": utils.get_env('REMOTE_SERVICE_URL'),
+                 "PULL_SECRET": utils.get_env('PULL_SECRET'),
                  "OFFLINE_TOKEN": utils.get_env('OFFLINE_TOKEN'),
                  "OPENSHIFT_VERSION": utils.get_env('OPENSHIFT_VERSION', '4.6'),
                  "BASE_DOMAIN": utils.get_env('BASE_DOMAIN', "redhat.com"),

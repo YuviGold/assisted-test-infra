@@ -6,7 +6,7 @@ from test_infra.controllers.node_controllers.libvirt_controller import LibvirtCo
 class QeVmController(LibvirtController):
 
     def __init__(self, **kwargs):
-        super(QeVmController, self).__init__(**kwargs)
+        super().__init__(**kwargs)
 
     def format_node_disk(self, node_name):
         logging.info("Formating disk for %s", node_name)

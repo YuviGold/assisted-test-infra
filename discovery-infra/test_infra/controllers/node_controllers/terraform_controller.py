@@ -14,16 +14,16 @@ from test_infra.controllers.node_controllers.libvirt_controller import LibvirtCo
 class TerraformController(LibvirtController):
 
     def __init__(self, **kwargs):
-        super(TerraformController, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.cluster_name = kwargs.get('CLUSTER_NAME', f'{consts.CLUSTER_PREFIX}')
-        self.params = self.terraform_params(**kwargs)
-        self.tf_folder = self.create_tf_folder()
+        self.params = self._terraform_params(**kwargs)
+        self.tf_folder = self._create_tf_folder()
         self.image_path = kwargs["ISO_DOWNLOAD_PATH"]
 
     def __del__(self):
         self.destroy_all_nodes()
 
-    def create_tf_folder(self):
+    def _create_tf_folder(self):
         tf_folder = utils.get_tf_folder(self.cluster_name)
         logging.info("Creating %s as terraform folder", tf_folder)
         utils.recreate_folder(tf_folder)
@@ -31,7 +31,7 @@ class TerraformController(LibvirtController):
         return tf_folder
 
     # TODO move all those to conftest and pass it as kwargs
-    def terraform_params(self, **kwargs):
+    def _terraform_params(self, **kwargs):
         params = {"libvirt_worker_memory": kwargs.get('WORKER_MEMORY'),
                   "libvirt_master_memory": kwargs.get('MASTER_MEMORY', 16984),
                   "worker_count": kwargs.get('NUM_WORKERS', 0),
@@ -59,10 +59,10 @@ class TerraformController(LibvirtController):
         return self.list_nodes_with_name_filter(self.cluster_name)
 
     # Run make run terraform -> creates vms
-    def create_nodes(self, running=True):
+    def _create_nodes(self, running=True):
         logging.info("Creating tfvars")
 
-        self.fill_tfvars()
+        self._fill_tfvars()
         logging.info('Start running terraform')
 
         utils.run_command_with_output(
@@ -78,7 +78,7 @@ class TerraformController(LibvirtController):
             )
 
     # Filling tfvars json files with terraform needed variables to spawn vms
-    def fill_tfvars(self, running=True):
+    def _fill_tfvars(self, running=True):
         tfvars_json_file = os.path.join(self.tf_folder, consts.TFVARS_JSON_NAME)
         logging.info("Filling tfvars")
         with open(tfvars_json_file) as _file:
@@ -141,7 +141,7 @@ class TerraformController(LibvirtController):
     def start_all_nodes(self):
         nodes = self.list_nodes()
         if len(nodes) == 0:
-            self.create_nodes()
+            self._create_nodes()
         else:
             for node in nodes.keys():
                 self.start_node(node)
@@ -217,4 +217,4 @@ class TerraformController(LibvirtController):
             utils.touch(self.image_path)
 
         self.params.running = False
-        self.create_nodes()
+        self._create_nodes()
