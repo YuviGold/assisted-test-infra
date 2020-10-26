@@ -11,8 +11,8 @@ from tests.conftest import env_variables
 class BaseTest:
     @pytest.fixture()
     def api_client(self):
-        client = assisted_service_api.create_client(env_variables['REMOTE_SERVICE_URL'])
-        self.delete_cluster_if_exists(api_client=client, cluster_name=env_variables['CLUSTER_NAME'])
+        client = assisted_service_api.create_client(env_variables['remote_service_url'])
+        self.delete_cluster_if_exists(api_client=client, cluster_name=env_variables['cluster_name'])
         return client
 
     @pytest.fixture(scope="function")
@@ -25,12 +25,12 @@ class BaseTest:
     @staticmethod
     def create_cluster(
             api_client,
-            cluster_name=env_variables['CLUSTER_NAME'], 
-            ssh_public_key=env_variables['SSH_PUBLIC_KEY'], 
-            pull_secret=env_variables['PULL_SECRET'], 
-            openshift_version=env_variables['OPENSHIFT_VERSION'], 
-            base_dns_domain=env_variables['BASE_DOMAIN'], 
-            vip_dhcp_allocation=env_variables['VIP_DHCP_ALLOCATION']
+            cluster_name=env_variables['cluster_name'], 
+            ssh_public_key=env_variables['ssh_public_key'], 
+            pull_secret=env_variables['pull_secret'], 
+            openshift_version=env_variables['openshift_version'], 
+            base_dns_domain=env_variables['base_domain'], 
+            vip_dhcp_allocation=env_variables['vip_dhcp_allocation']
     ):
         return api_client.create_cluster(
             cluster_name, 
@@ -62,8 +62,8 @@ class BaseTest:
     def generate_and_download_image(
         cluster_id, 
         api_client, 
-        iso_download_path=env_variables['ISO_DOWNLOAD_PATH'],
-        ssh_key=env_variables['SSH_PUBLIC_KEY']
+        iso_download_path=env_variables['iso_download_path'],
+        ssh_key=env_variables['ssh_public_key']
     ):
         logging.info(iso_download_path)
         api_client.generate_and_download_image(
@@ -76,7 +76,7 @@ class BaseTest:
     def wait_until_hosts_are_discovered(
         cluster_id, 
         api_client, 
-        nodes_count=env_variables['NUM_NODES']
+        nodes_count=env_variables['num_nodes']
     ):
         utils.wait_till_all_hosts_are_in_status(
             client=api_client, 
@@ -97,9 +97,9 @@ class BaseTest:
         cluster_id, 
         api_client, 
         controller,
-        nodes_count=env_variables['NUM_NODES'],
-        vip_dhcp_allocation=env_variables['VIP_DHCP_ALLOCATION'],
-        cluster_machine_cidr=env_variables["MACHINE_CIDR"]
+        nodes_count=env_variables['num_nodes'],
+        vip_dhcp_allocation=env_variables['vip_dhcp_allocation'],
+        cluster_machine_cidr=env_variables['machine_cidr']
     ):
         if vip_dhcp_allocation:
             BaseTest.set_cluster_machine_cidr(cluster_id, api_client, cluster_machine_cidr)
@@ -212,7 +212,7 @@ class BaseTest:
     def wait_for_nodes_to_install(
         cluster_id, 
         api_client, 
-        nodes_count=env_variables['NUM_NODES'], 
+        nodes_count=env_variables['num_nodes'], 
         timeout=consts.CLUSTER_INSTALLATION_TIMEOUT
     ):
         utils.wait_till_all_hosts_are_in_status(
