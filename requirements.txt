@@ -15,3 +15,4 @@ netaddr==0.8.0
 pytest==6.0.1
 python-dateutil==2.8.0
 openshift-client==1.0.6
+paramiko==2.7.2
