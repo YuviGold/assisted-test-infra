@@ -15,7 +15,7 @@ class TestProxy(BaseTest):
         assert install_config['proxy']['httpsProxy'] == https_proxy
 
     def _are_proxy_paramas_defined_in_clusterwide_proxy(self, cluster_id, api_client, http_proxy, https_proxy):
-        api_client.download_kubeconfig(cluster_id, env_variables['KUBECONFIG_PATH'])
+        api_client.download_kubeconfig(cluster_id, env_variables['kubeconfig_path'])
         log.info(f'Verifying proxy parameters are deinfied in cluster wide proxy object for Cluster {cluster_id}')
         proxy_object = oc.selector('proxy/cluster').objects()[0]
         assert proxy_object.model.spec.httpProxy == http_proxy
@@ -25,8 +25,8 @@ class TestProxy(BaseTest):
     @pytest.mark.parametrize(
         "http_proxy, https_proxy", 
         [
-            (env_variables['HTTP_PROXY'], ""), 
-            (env_variables['HTTP_PROXY'], env_variables['HTTPS_PROXY'])
+            (env_variables['http_proxy_url'], ""), 
+            (env_variables['http_proxy_url'], env_variables['https_proxy_url'])
         ]
     )
     @pytest.mark.proxy
