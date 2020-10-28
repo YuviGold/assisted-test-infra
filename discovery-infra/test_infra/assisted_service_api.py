@@ -13,19 +13,20 @@ from logger import log
 
 
 class InventoryClient(object):
-    def __init__(self, inventory_url):
+    def __init__(self, inventory_url, offline_token):
         self.inventory_url = inventory_url
         configs = Configuration()
         configs.host = self.inventory_url + "/api/assisted-install/v1"
         configs.verify_ssl = False
-        self.set_config_auth(configs)
+        self.set_config_auth(configs, offline_token)
 
         self.api = ApiClient(configuration=configs)
         self.client = api.InstallerApi(api_client=self.api)
         self.events = api.EventsApi(api_client=self.api)
 
-    def set_config_auth(self, c):
-        offline_token = os.environ.get('OFFLINE_TOKEN', "")
+    def set_config_auth(self, c, offline_token):
+        # offline_token = os.environ.get('OFFLINE_TOKEN', "")
+        log.info(f"offline token {offline_token}")
         if offline_token == "":
             log.info("OFFLINE_TOKEN not set, skipping authentication headers")
             return
@@ -266,9 +267,9 @@ class InventoryClient(object):
         log.info("Getting install-config for cluster %s", cluster_id)
         return self.client.get_cluster_install_config(cluster_id=cluster_id)
 
-def create_client(url, wait_for_api=True):
+def create_client(url, offline_token=os.environ.get('OFFLINE_TOKEN', ""), wait_for_api=True):
     log.info('Creating assisted-service client for url: %s', url)
-    c = InventoryClient(url)
+    c = InventoryClient(url, offline_token)
     if wait_for_api:
         c.wait_for_api_readiness()
     return c

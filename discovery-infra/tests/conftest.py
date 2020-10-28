@@ -25,6 +25,7 @@ env_variables = {"ssh_public_key": utils.get_env('SSH_PUB_KEY'),
                  "remote_service_url": utils.get_env('REMOTE_SERVICE_URL'),
                  "pull_secret": utils.get_env('PULL_SECRET'),
                  "offline_token": utils.get_env('OFFLINE_TOKEN'),
+                 "second_offline_token": utils.get_env('SECOND_OFFLINE_TOKEN'),
                  "openshift_version": utils.get_env('OPENSHIFT_VERSION', '4.6'),
                  "base_domain": utils.get_env('BASE_DOMAIN', "redhat.com"),
                  "num_masters": int(utils.get_env('NUM_MASTERS', consts.NUMBER_OF_MASTERS)),
@@ -52,13 +53,17 @@ env_variables["num_nodes"] = env_variables["num_workers"] + env_variables["num_m
 
 @pytest.fixture(scope="session")
 def api_client():
-    url = env_variables['remote_service_url']
+    def get_api_client(offline_token=env_variables['offline_token']):
+        url = env_variables['remote_service_url']
 
-    if not url:
-        url = utils.get_local_assisted_service_url(
-            utils.get_env('PROFILE'), utils.get_env('NAMESPACE'), 'assisted-service', utils.get_env('DEPLOY_TARGET'))
+        if not url:
+            url = utils.get_local_assisted_service_url(
+                utils.get_env('PROFILE'), utils.get_env('NAMESPACE'), 'assisted-service', utils.get_env('DEPLOY_TARGET'))
+        
+        return assisted_service_api.create_client(url, offline_token)
 
-    yield assisted_service_api.create_client(url)
+
+    yield get_api_client
 
 
 @pytest.fixture(scope="session")
