@@ -93,7 +93,7 @@ class Cluster:
             nodes_count=nodes_count
         )
 
-    def wait_for_node_status(self, statuses, nodes_count=1):
+    def wait_for_host_status(self, statuses, nodes_count=1):
         utils.wait_till_at_least_one_host_is_in_status(
             client=self.api_client,
             cluster_id=self.id,
@@ -112,13 +112,13 @@ class Cluster:
         self.api_client.cancel_cluster_install(cluster_id=self.id)
 
     def get_bootstrap_hostname(self):
-        hosts = self.get_nodes_by_role(consts.NodeRoles.MASTER)
+        hosts = self.get_hosts_by_role(consts.NodeRoles.MASTER)
         for host in hosts:
             if host.get('bootstrap'):
                 logging.info("Bootstrap node is: %s", host["requested_hostname"])
                 return host["requested_hostname"]
 
-    def get_nodes_by_role(self, role):
+    def get_hosts_by_role(self, role):
         hosts = self.api_client.get_cluster_hosts(self.id)
         nodes_by_role = []
         for host in hosts:
@@ -169,7 +169,7 @@ class Cluster:
             statuses=[consts.ClusterStatus.INSUFFICIENT]
         )
     
-    def wait_for_nodes_to_install(
+    def wait_for_hosts_to_install(
         self, 
         nodes_count=env_variables['num_nodes'],
         timeout=consts.CLUSTER_INSTALLATION_TIMEOUT
