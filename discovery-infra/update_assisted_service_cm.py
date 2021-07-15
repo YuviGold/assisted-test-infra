@@ -11,20 +11,17 @@
 #   MY_VAR: ""
 #
 # Hence, in order to support unset env vars, avoid override in Makefile.
-
+import json
 import os
-
 import yaml
+
+from test_infra import warn_deprecate
+
+warn_deprecate()
+
 
 CM_PATH = "assisted-service/deploy/assisted-service-configmap.yaml"
 ENVS = [
-    ("HW_VALIDATOR_MIN_CPU_CORES", "2"),
-    ("HW_VALIDATOR_MIN_CPU_CORES_WORKER", "2"),
-    ("HW_VALIDATOR_MIN_CPU_CORES_MASTER", "4"),
-    ("HW_VALIDATOR_MIN_RAM_GIB", "3"),
-    ("HW_VALIDATOR_MIN_RAM_GIB_WORKER", "3"),
-    ("HW_VALIDATOR_MIN_RAM_GIB_MASTER", "8"),
-    ("HW_VALIDATOR_MIN_DISK_SIZE_GIB", "10"),
     ("INSTALLER_IMAGE", ""),
     ("CONTROLLER_IMAGE", ""),
     ("SERVICE_BASE_URL", ""),
@@ -33,8 +30,35 @@ ENVS = [
     ("IMAGE_BUILDER", ""),
     ("OCM_BASE_URL", ""),
     ("PUBLIC_CONTAINER_REGISTRIES", ""),
-    ("CHECK_CLUSTER_VERSION", "")
+    ("CHECK_CLUSTER_VERSION", ""),
+    ("HW_VALIDATOR_REQUIREMENTS", ""),
+    ("HW_VALIDATOR_MIN_CPU_CORES_SNO", ""),
+    ("HW_VALIDATOR_MIN_RAM_GIB_SNO", "")
 ]
+DEFAULT_MASTER_REQUIREMENTS = {
+    "cpu_cores": 4,
+    "ram_mib": 8192,
+    "disk_size_gb": 10,
+    "installation_disk_speed_threshold_ms": 10
+}
+DEFAULT_WORKER_REQUIREMENTS = {
+    "cpu_cores": 2,
+    "ram_mib": 3072,
+    "disk_size_gb": 10,
+    "installation_disk_speed_threshold_ms": 10
+}
+DEFAULT_SNO_REQUIREMENTS = {
+    "cpu_cores": 8,
+    "ram_mib": 32768,
+    "disk_size_gb": 10,
+    "installation_disk_speed_threshold_ms": 10
+}
+DEFAULT_REQUIREMENTS = [{
+    "version": "default",
+    "master": DEFAULT_MASTER_REQUIREMENTS,
+    "worker": DEFAULT_WORKER_REQUIREMENTS,
+    "sno": DEFAULT_SNO_REQUIREMENTS
+}]
 
 
 def _read_yaml():
@@ -56,11 +80,27 @@ def _get_relevant_envs():
     return data
 
 
+def update_requirements(requirements_json):
+    if requirements_json == "" or requirements_json == "REPLACE_HW_VALIDATOR_REQUIREMENTS":
+        return json.dumps(DEFAULT_REQUIREMENTS)
+    requirements = json.loads(requirements_json)
+    for version_requirements in requirements:
+        if version_requirements["version"] == "default":
+            version_requirements["master"] = DEFAULT_MASTER_REQUIREMENTS
+            version_requirements["worker"] = DEFAULT_WORKER_REQUIREMENTS
+            version_requirements["sno"] = DEFAULT_SNO_REQUIREMENTS
+
+    return json.dumps(requirements)
+
+
 def set_envs_to_service_cm():
     cm_data = _read_yaml()
     if not cm_data:
         raise Exception("%s must exists before setting envs to it" % CM_PATH)
     cm_data["data"].update(_get_relevant_envs())
+    existing_requirements = cm_data["data"].get("HW_VALIDATOR_REQUIREMENTS", "")
+    requirements = update_requirements(existing_requirements)
+    cm_data["data"].update({"HW_VALIDATOR_REQUIREMENTS": requirements})
     with open(CM_PATH, "w") as cm_file:
         yaml.dump(cm_data, cm_file)
 

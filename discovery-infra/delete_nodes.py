@@ -4,12 +4,22 @@
 import argparse
 import os
 import shutil
+import re
 
-from test_infra import assisted_service_api, utils, consts
+from distutils.util import strtobool
+
+from kubernetes.client import CoreV1Api
+
+from test_infra import assisted_service_api, utils, consts, warn_deprecate
+from test_infra.controllers.nat_controller import NatController
+from test_infra.helper_classes.kube_helpers import create_kube_api_client
+from test_infra.utils.kubeapi_utils import delete_kube_api_resources_for_namespace
 
 import oc_utils
 import virsh_cleanup
 from logger import log
+
+warn_deprecate()
 
 
 @utils.on_exception(message='Failed to delete cluster', silent=True)
@@ -18,7 +28,7 @@ def try_to_delete_cluster(namespace, tfvars):
         exists.
     """
     cluster_id = tfvars.get('cluster_inventory_id')
-    if not cluster_id:
+    if args.kube_api or not cluster_id:
         return
 
     args.namespace = namespace
@@ -27,11 +37,25 @@ def try_to_delete_cluster(namespace, tfvars):
     )
     client.delete_cluster(cluster_id=cluster_id)
 
+def _get_namespace_index(libvirt_network_if):
+    # Hack to retrieve namespace index - does not exist in tests
+    matcher = re.match(r'^tt(\d+)$', libvirt_network_if)
+    return int(matcher.groups()[0]) if matcher is not None else 0
+
+@utils.on_exception(message='Failed to remove nat', silent=True)
+def _try_remove_nat(tfvars):
+    primary_interface = tfvars.get('libvirt_network_if')
+    if primary_interface is None:
+        raise Exception("Could not get primary interface")
+    secondary_interface = tfvars.get('libvirt_secondary_network_if', f's{primary_interface}')
+    nat_controller = NatController([primary_interface, secondary_interface], _get_namespace_index(primary_interface))
+    nat_controller.remove_nat_rules()
 
 def delete_nodes(cluster_name, namespace, tf_folder, tfvars):
     """ Runs terraform destroy and then cleans it with virsh cleanup to delete
         everything relevant.
     """
+    _try_remove_nat(tfvars)
     if os.path.exists(tf_folder):
         _try_to_delete_nodes(tf_folder)
 
@@ -79,13 +103,7 @@ def _delete_virsh_resources(*filters):
 )
 def delete_clusters_from_all_namespaces():
     for name, namespace in utils.get_all_namespaced_clusters():
-        args.profile = namespace
-        try:
-            args.profile = 'minikube'
-            delete_cluster(name, namespace)
-        except BaseException:
-            args.profile = namespace
-            delete_cluster(name, namespace)
+        delete_cluster(name, namespace)
 
 
 @utils.on_exception(message='Failed to delete cluster', silent=True)
@@ -105,12 +123,35 @@ def delete_cluster(cluster_name, namespace):
     delete_nodes(cluster_name, namespace, tf_folder, tfvars)
 
 
+@utils.on_exception(message='Failed to delete kube api resources', silent=True)
+def delete_kube_api_resources_from_namespaces(namespace):
+    kube_api_client = create_kube_api_client()
+
+    if namespace != 'all':
+        return delete_kube_api_resources_for_namespace(
+            kube_api_client=kube_api_client,
+            name=f'{args.cluster_name or consts.CLUSTER_PREFIX}-{namespace}',
+            namespace=namespace
+        )
+
+    v1 = CoreV1Api(kube_api_client)
+    for namespace in v1.list_namespace():
+        return delete_kube_api_resources_for_namespace(
+            kube_api_client=kube_api_client,
+            name=f'{args.cluster_name or consts.CLUSTER_PREFIX}-{namespace}',
+            namespace=namespace
+        )
+
+
 @utils.on_exception(
     message='Failed to delete nodes',
     silent=True,
     errors=(FileNotFoundError,)
 )
 def main():
+    if args.kube_api:
+        delete_kube_api_resources_from_namespaces(args.namespace)
+
     if args.delete_all:
         _delete_virsh_resources()
         return
@@ -167,16 +208,18 @@ if __name__ == "__main__":
         required=False
     )
     parser.add_argument(
-        '--profile',
-        help='Minikube profile for assisted-installer deployment',
-        type=str,
-        default='assisted-installer'
-    )
-    parser.add_argument(
         '--deploy-target',
         help='Where assisted-service is deployed',
         type=str,
         default='minikube'
+    )
+    parser.add_argument(
+        "--kube-api",
+        help="Should kube-api interface be used for cluster deployment",
+        type=strtobool,
+        nargs='?',
+        const=True,
+        default=False,
     )
     oc_utils.extend_parser_with_oc_arguments(parser)
     args = parser.parse_args()

@@ -7,22 +7,26 @@ function install_minikube() {
         return
     fi
 
-    if ! [ -x "$(command -v minikube)" ]; then
+    minikube_version=v1.20.0
+    minikube_path=$(command -v minikube)
+    if ! [ -x "$minikube_path" ]; then 
         echo "Installing minikube..."
-        curl --retry 3 -Lo minikube https://storage.googleapis.com/minikube/releases/v1.8.2/minikube-linux-amd64
-        chmod +x minikube
-        ${SUDO} cp minikube /usr/bin/
+        arkade get minikube --version=$minikube_version
+        ${SUDO} mv -f ${HOME}/.arkade/bin/minikube /usr/local/bin/
+    elif [ "$(minikube version | grep version | awk -F'version: *' '{print $2}')" != "$minikube_version" ]; then
+        echo "Upgrading minikube..."
+        arkade get minikube --version=$minikube_version
+        ${SUDO} mv -f ${HOME}/.arkade/bin/minikube $minikube_path
     else
-        echo "minikube is already installed"
+        echo "minikube is already installed and up-to-date"
     fi
 }
 
 function install_kubectl() {
     if ! [ -x "$(command -v kubectl)" ]; then
         echo "Installing kubectl..."
-        curl --retry 3 -Lo kubectl https://storage.googleapis.com/kubernetes-release/release/v1.17.0/bin/linux/amd64/kubectl
-        chmod +x kubectl
-        ${SUDO} mv kubectl /usr/bin/
+        arkade get kubectl --version=v1.20.0
+        ${SUDO} mv ${HOME}/.arkade/bin/kubectl /usr/local/bin/
     else
         echo "kubectl is already installed"
     fi
@@ -32,7 +36,7 @@ function install_oc() {
     if ! [ -x "$(command -v oc)" ]; then
         echo "Installing oc..."
         for i in {1..4}; do
-            curl --retry 3 -SL https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/4.6.0/openshift-client-linux-4.6.0.tar.gz | tar -xz -C /usr/local/bin && break
+            curl --retry 3 -SL https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/4.8.0-rc.0/openshift-client-linux-4.8.0-rc.0.tar.gz | tar -xz -C /usr/local/bin && break
             echo "command failed. Retrying again in 5 seconds..."
             sleep 5
         done
@@ -41,6 +45,16 @@ function install_oc() {
     fi
 }
 
+function install_arkade() {
+    if ! [ -x "$(command -v arkade)" ]; then
+        echo "Installing arkade..."
+        curl -sLS https://dl.get-arkade.dev | ${SUDO} sh
+    else
+        echo "arkade is already installed"
+    fi
+}
+
+install_arkade
 install_minikube
 install_kubectl
 install_oc

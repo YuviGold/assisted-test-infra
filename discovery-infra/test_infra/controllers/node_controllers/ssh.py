@@ -1,6 +1,9 @@
 import logging
 import socket
 import time
+from ipaddress import IPv4Address, ip_address
+from pathlib import Path
+from typing import Optional
 
 import paramiko
 import scp
@@ -10,7 +13,7 @@ logging.getLogger('paramiko').setLevel(logging.CRITICAL)
 
 class SshConnection:
 
-    def __init__(self, ip, private_ssh_key_path=None, username="core", port=22, **kwargs):
+    def __init__(self, ip, private_ssh_key_path: Optional[Path] = None, username="core", port=22, **kwargs):
         self._ip = ip
         self._username = username
         self._key_path = private_ssh_key_path
@@ -30,7 +33,7 @@ class SshConnection:
             self._ssh_client.close()
             self._ssh_client = None
 
-    def connect(self, timeout=10):
+    def connect(self, timeout=60):
         logging.info("Going to connect to ip %s", self._ip)
         self.wait_for_tcp_server()
         self._ssh_client = paramiko.SSHClient()
@@ -43,7 +46,7 @@ class SshConnection:
             timeout=timeout,
             look_for_keys=False,
             auth_timeout=timeout,
-            key_filename=self._key_path)
+            key_filename=str(self._key_path))
         self._ssh_client.get_transport().set_keepalive(15)
 
     def wait_for_tcp_server(self, timeout=60, interval=0.1):
@@ -53,12 +56,17 @@ class SshConnection:
             if self._raw_tcp_connect((self._ip, self._port)):
                 return
             time.sleep(interval)
-        raise TimeoutError("SSH TCP Server '%(hostname)s:%(port)s' did not respond within timeout" % dict(
+        raise TimeoutError("SSH TCP Server '[%(hostname)s]:%(port)s' did not respond within timeout" % dict(
             hostname=self._ip, port=self._port))
 
     @classmethod
     def _raw_tcp_connect(cls, tcp_endpoint):
-        s = socket.socket()
+        if isinstance(ip_address(tcp_endpoint[0]), IPv4Address):
+            family = socket.AF_INET
+        else:
+            family = socket.AF_INET6
+
+        s = socket.socket(family=family)
         try:
             s.connect(tcp_endpoint)
             return True

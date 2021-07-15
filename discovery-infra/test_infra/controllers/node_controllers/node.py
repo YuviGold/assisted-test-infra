@@ -1,11 +1,16 @@
 import logging
+from pathlib import Path
+from typing import Callable, Optional
+
+from scp import SCPException
 
 from test_infra import consts
 from test_infra.controllers.node_controllers import ssh
+from test_infra.controllers.node_controllers.disk import Disk
 
 
 class Node:
-    def __init__(self, name, node_controller, private_ssh_key_path=None, username="core"):
+    def __init__(self, name, node_controller, private_ssh_key_path: Optional[Path] = None, username="core"):
         self.name = name
         self.private_ssh_key_path = private_ssh_key_path
         self.username = username
@@ -47,9 +52,26 @@ class Node:
 
     @property
     def ssh_connection(self):
-        return ssh.SshConnection(self.ips[0],
-                                 private_ssh_key_path=self.private_ssh_key_path,
-                                 username=self.username)
+        if not self.ips:
+            raise RuntimeError(f"No available IPs for node {self.name}")
+
+        logging.info("Trying to access through IP addresses: %s", ", ".join(self.ips))
+        for ip in self.ips:
+            exception = None
+            try:
+                connection = ssh.SshConnection(
+                    ip,
+                    private_ssh_key_path=self.private_ssh_key_path,
+                    username=self.username)
+                connection.connect()
+                return connection
+
+            except (TimeoutError, SCPException) as e:
+                logging.warning("Could not SSH through IP %s: %s", ip, str(e))
+                exception = e
+
+        if exception is not None:
+            raise exception
 
     def upload_file(self, local_source_path, remote_target_path):
         with self.ssh_connection as _ssh:
@@ -86,8 +108,8 @@ class Node:
         self.format_disk()
         self.start()
 
-    def format_disk(self):
-        self.node_controller.format_node_disk(self.name)
+    def format_disk(self, disk_index: int = 0):
+        self.node_controller.format_node_disk(self.name, disk_index)
 
     def kill_installer(self):
         self.kill_podman_container_by_name("assisted-installer")
@@ -112,6 +134,10 @@ class Node:
     def set_boot_order(self, cd_first=False):
         logging.info("Setting boot order with cd_first=%s on %s", cd_first, self.name)
         self.node_controller.set_boot_order(node_name=self.name, cd_first=cd_first)
+
+    def set_per_device_boot_order(self, key: Callable[[Disk], int]):
+        logging.info("Setting boot order on %s", self.name)
+        self.node_controller.set_per_device_boot_order(node_name=self.name, key=key)
 
     def set_boot_order_flow(self, cd_first=False, start=True):
         logging.info("Setting boot order , cd_first=%s, start=%s", cd_first, start)
@@ -141,8 +167,11 @@ class Node:
     def reset_ram_kib(self):
         self.set_ram_kib(self.original_ram_kib)
 
-    def attach_test_disk(self, disk_size, bootable=False):
-        return self.node_controller.attach_test_disk(self.name, disk_size, bootable)
+    def get_disks(self):
+        self.node_controller.list_disks(self.name)
+
+    def attach_test_disk(self, disk_size, **kwargs):
+        return self.node_controller.attach_test_disk(self.name, disk_size, **kwargs)
 
     def detach_all_test_disks(self):
         self.node_controller.detach_all_test_disks(self.name)

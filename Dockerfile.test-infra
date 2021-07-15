@@ -2,21 +2,28 @@ FROM quay.io/ocpmetal/assisted-service:latest AS service
 
 FROM quay.io/centos/centos:8.3.2011
 
-RUN yum -y install make gcc unzip wget curl git podman httpd-tools jq nss_wrapper \
-  python3 python3-devel \
-  libvirt-client libvirt-devel libguestfs-tools \
-  rsync \
-  && \
-  yum clean all && pip3 install --upgrade pip
+RUN yum -y install \
+  make \
+  gcc \
+  unzip \
+  wget \
+  curl \
+  git \
+  podman \
+  httpd-tools \
+  jq \
+  nss_wrapper \
+  python3 \
+  python3-devel \
+  libvirt-client \
+  libvirt-devel \
+  libguestfs-tools \
+    && yum clean all && pip3 install --upgrade pip
 
-RUN curl -Lo terraform.zip https://releases.hashicorp.com/terraform/0.12.29/terraform_0.12.29_linux_amd64.zip && unzip terraform.zip -d /usr/bin/ && rm -rf terraform.zip
-
-RUN curl -Lo minikube https://storage.googleapis.com/minikube/releases/v1.10.1/minikube-linux-amd64 \
-  && chmod +x minikube && mkdir -p /usr/local/bin/ && install minikube /usr/local/bin/
-RUN curl -Lo kubectl https://storage.googleapis.com/kubernetes-release/release/v1.17.0/bin/linux/amd64/kubectl && chmod +x kubectl && mv kubectl /usr/bin/
+RUN curl -Lo terraform.zip https://releases.hashicorp.com/terraform/0.14.11/terraform_0.14.11_linux_amd64.zip && unzip terraform.zip -d /usr/bin/ && rm -rf terraform.zip
 
 RUN mkdir -p /root/.terraform.d/plugins
-RUN curl -SL https://github.com/dmacvicar/terraform-provider-libvirt/releases/download/v0.6.2/terraform-provider-libvirt-0.6.2+git.1585292411.8cbe9ad0.Fedora_28.x86_64.tar.gz | \
+RUN curl -SL https://github.com/dmacvicar/terraform-provider-libvirt/releases/download/v0.6.3/terraform-provider-libvirt-0.6.3+git.1604843676.67f4f2aa.Fedora_32.x86_64.tar.gz | \
   tar -xz -C /root/.terraform.d/plugins
 RUN curl -SL https://releases.hashicorp.com/terraform-provider-local/2.0.0/terraform-provider-local_2.0.0_linux_amd64.zip > /tmp/tpl.zip && unzip -d /root/.terraform.d/plugins /tmp/tpl.zip && rm -f /tmp/tpl.zip
 

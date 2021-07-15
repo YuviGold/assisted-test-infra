@@ -4,10 +4,12 @@
 import argparse
 import sys
 
-from test_infra import assisted_service_api, utils, consts
+from test_infra import assisted_service_api, utils, consts, warn_deprecate
 
 import day2
 import oc_utils
+
+warn_deprecate()
 
 
 def get_ocp_cluster(args):
@@ -58,12 +60,6 @@ if __name__ == "__main__":
         help='Override assisted-service target service name',
         type=str,
         default='assisted-service'
-    )
-    parser.add_argument(
-        '--profile',
-        help='Minikube profile for assisted-installer deployment',
-        type=str,
-        default='assisted-installer'
     )
     parser.add_argument(
         '--deploy-target',

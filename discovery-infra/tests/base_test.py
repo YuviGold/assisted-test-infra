@@ -2,115 +2,166 @@ import json
 import logging
 import os
 import shutil
+from typing import Callable
 from contextlib import suppress
-from copy import deepcopy
 from pathlib import Path
-from typing import Optional
+from typing import Tuple, List, Optional
 
 import pytest
+from netaddr import IPNetwork
+
 import test_infra.utils as infra_utils
 import waiting
 from assisted_service_client.rest import ApiException
+
 from download_logs import download_logs
+from junit_report import JunitFixtureTestCase, JunitTestCase
 from paramiko import SSHException
 from test_infra import consts
+from test_infra.controllers.iptables import IptableRule
+from test_infra.controllers.node_controllers.node import Node
+from tests.config import ClusterConfig, global_variables
 from test_infra.controllers.proxy_controller.proxy_controller import ProxyController
 from test_infra.helper_classes.cluster import Cluster
-from test_infra.helper_classes.kube_helpers import create_kube_api_client, cluster_deployment_context
+from test_infra.helper_classes.kube_helpers import create_kube_api_client, KubeAPIContext
 from test_infra.helper_classes.nodes import Nodes
-from test_infra.tools.assets import NetworkAssets
-from tests.conftest import env_variables, qe_env
+from test_infra.tools.assets import LibvirtNetworkAssets
+from tests.config import TerraformConfig
+from test_infra.controllers.nat_controller import NatController
+from test_infra.controllers.node_controllers import TerraformController
+from test_infra.utils.operators_utils import parse_olm_operators_from_env, resource_param
+from test_infra.consts import OperatorResource
 
 
 class BaseTest:
-    @staticmethod
-    def override_node_parameters(**kwargs):
-        _vars = deepcopy(env_variables)
-        for key, value in kwargs.items():
-            _vars[key] = value
-
-        _vars['num_nodes'] = _vars['num_workers'] + _vars['num_masters']
-
-        return _vars
-
     @pytest.fixture(scope="function")
-    def nodes(self, setup_node_controller, request):
-        if hasattr(request, 'param'):
-            node_vars = self.override_node_parameters(**request.param)
-        else:
-            node_vars = env_variables
-        net_asset = None
-        try:
-            if not qe_env:
-                net_asset = NetworkAssets()
-                node_vars["net_asset"] = net_asset.get()
-            controller = setup_node_controller(**node_vars)
-            nodes = Nodes(controller, node_vars["private_ssh_key_path"])
+    def get_nodes(self) -> Callable[[TerraformConfig, ClusterConfig], Nodes]:
+        """ Currently support only single instance of nodes """
+        nodes_data = dict()
+
+        @JunitTestCase()
+        def get_nodes_func(tf_config: TerraformConfig, cluster_config: ClusterConfig):
+            if "nodes" in nodes_data:
+                return nodes_data["nodes"]
+
+            nodes_data["configs"] = cluster_config, tf_config
+            net_asset = LibvirtNetworkAssets()
+            tf_config.net_asset = net_asset.get()
+            nodes_data["net_asset"] = net_asset
+
+            controller = TerraformController(tf_config, cluster_config=cluster_config)
+            nodes = Nodes(controller, tf_config.private_ssh_key_path)
+            nodes_data["nodes"] = nodes
+
             nodes.prepare_nodes()
-            yield nodes
-            if env_variables['test_teardown']:
+            interfaces = BaseTest.nat_interfaces(tf_config)
+            nat = NatController(interfaces, NatController.get_namespace_index(interfaces[0]))
+            nat.add_nat_rules()
+            nodes_data["nat"] = nat
+
+            return nodes
+
+        yield get_nodes_func
+
+        _nodes: Nodes = nodes_data.get("nodes")
+        _cluster_config, _tf_config = nodes_data.get("configs")
+        _nat: NatController = nodes_data.get("nat")
+        _net_asset: LibvirtNetworkAssets = nodes_data.get("net_asset")
+
+        try:
+            if _nodes and global_variables.test_teardown:
                 logging.info('--- TEARDOWN --- node controller\n')
-                nodes.destroy_all_nodes()
+                _nodes.destroy_all_nodes()
+                logging.info(f'--- TEARDOWN --- deleting iso file from: {_cluster_config.iso_download_path}\n')
+                infra_utils.run_command(f"rm -f {_cluster_config.iso_download_path}", shell=True)
+
+                if _nat:
+                    _nat.remove_nat_rules()
         finally:
-            if not qe_env:
-                net_asset.release_all()
+            if _net_asset:
+                _net_asset.release_all()
+
+    @classmethod
+    def nat_interfaces(cls, config: TerraformConfig):
+        return config.net_asset.libvirt_network_if, config.net_asset.libvirt_secondary_network_if
 
     @pytest.fixture()
-    def cluster(self, api_client, request, nodes):
-        clusters = []
+    @JunitFixtureTestCase()
+    def get_cluster(self, api_client, request, proxy_server, get_nodes) -> Callable[[Nodes, ClusterConfig], Cluster]:
+        """ Do not use get_nodes fixture in this fixture. It's here only to force pytest teardown
+        nodes after cluster """
 
-        def get_cluster_func(cluster_name: Optional[str] = None,
-                             additional_ntp_source: Optional[str] = consts.DEFAULT_ADDITIONAL_NTP_SOURCE,
-                             openshift_version: Optional[str] = env_variables['openshift_version'],
-                             user_managed_networking=False,
-                             high_availability_mode=consts.HighAvailabilityMode.FULL):
-            if not cluster_name:
-                cluster_name = env_variables.get('cluster_name', infra_utils.get_random_name(length=10))
-            res = Cluster(api_client=api_client,
-                          cluster_name=cluster_name,
-                          additional_ntp_source=additional_ntp_source,
-                          openshift_version=openshift_version,
-                          user_managed_networking=user_managed_networking,
-                          high_availability_mode=high_availability_mode)
-            clusters.append(res)
-            return res
+        clusters = list()
+
+        @JunitTestCase()
+        def get_cluster_func(nodes: Nodes, cluster_config: ClusterConfig) -> Cluster:
+            logging.debug(f'--- SETUP --- Creating cluster for test: {request.node.name}\n')
+            _cluster = Cluster(api_client=api_client, config=cluster_config, nodes=nodes)
+            if cluster_config.is_ipv6:
+                self._set_up_proxy_server(_cluster, cluster_config, proxy_server)
+
+            clusters.append(_cluster)
+            return _cluster
 
         yield get_cluster_func
         for cluster in clusters:
             if request.node.result_call.failed:
                 logging.info(f'--- TEARDOWN --- Collecting Logs for test: {request.node.name}\n')
-                self.collect_test_logs(cluster, api_client, request.node, nodes)
-            if env_variables['test_teardown']:
+                self.collect_test_logs(cluster, api_client, request.node, cluster.nodes)
+            if global_variables.test_teardown:
                 if cluster.is_installing() or cluster.is_finalizing():
                     cluster.cancel_install()
                 with suppress(ApiException):
                     logging.info(f'--- TEARDOWN --- deleting created cluster {cluster.id}\n')
                     cluster.delete()
 
+    @pytest.fixture
+    def configs(self) -> Tuple[ClusterConfig, TerraformConfig]:
+        """ Get configurations objects - while using configs fixture cluster and tf configs are the same
+        For creating new Config object just call it explicitly e.g. ClusterConfig(masters_count=1) """
+        yield ClusterConfig(), TerraformConfig()
+
+    @staticmethod
+    def _set_up_proxy_server(cluster: Cluster, cluster_config, proxy_server):
+        proxy_name = "squid-" + cluster_config.cluster_name.suffix
+        port = infra_utils.scan_for_free_port(consts.DEFAULT_PROXY_SERVER_PORT)
+
+        host_ip = str(IPNetwork(cluster.nodes.controller.get_machine_cidr()).ip + 1)
+        no_proxy = ",".join([cluster.nodes.controller.get_machine_cidr(), cluster_config.service_network_cidr,
+                             cluster_config.cluster_network_cidr,
+                             f".{str(cluster_config.cluster_name)}.redhat.com"])
+
+        # todo cluster.config will be property as part of MGMT-7060 - need to replace cluster._config.is_ipv6 with
+        #  cluster.config.is_ipv6
+        proxy = proxy_server(name=proxy_name, port=port, dir=proxy_name, host_ip=host_ip,
+                             is_ipv6=cluster._config.is_ipv6)
+        cluster.set_proxy_values(http_proxy=proxy.address, https_proxy=proxy.address, no_proxy=no_proxy)
+        install_config = cluster.get_install_config()
+        proxy_details = install_config.get("proxy")
+        assert proxy_details and proxy_details.get("httpProxy") == proxy.address
+        assert proxy_details.get("httpsProxy") == proxy.address
+
     @pytest.fixture()
-    def iptables(self):
+    def iptables(self) -> Callable[[Cluster, List[IptableRule], Optional[List[Node]]], None]:
         rules = []
 
         def set_iptables_rules_for_nodes(
-                cluster,
-                nodes,
-                given_nodes,
-                iptables_rules,
-                download_image=True,
-                iso_download_path=env_variables['iso_download_path'],
-                ssh_key=env_variables['ssh_public_key']
+                cluster: Cluster,
+                iptables_rules: List[IptableRule],
+                given_nodes=None,
         ):
-
             given_node_ips = []
-            if download_image:
+            given_nodes = given_nodes or cluster.nodes.nodes
+            cluster_config = cluster.config
+
+            if cluster_config.download_image:
                 cluster.generate_and_download_image(
-                    iso_download_path=iso_download_path,
-                    ssh_key=ssh_key
+                    iso_download_path=cluster_config.iso_download_path,
                 )
-            nodes.start_given(given_nodes)
+            cluster.nodes.start_given(given_nodes)
             for node in given_nodes:
                 given_node_ips.append(node.ips[0])
-            nodes.shutdown_given(given_nodes)
+            cluster.nodes.shutdown_given(given_nodes)
 
             logging.info(f'Given node ips: {given_node_ips}')
 
@@ -124,19 +175,27 @@ class BaseTest:
         for rule in rules:
             rule.delete()
 
-    @pytest.fixture(scope="function")
-    def attach_disk(self):
-        modified_nodes = []
+    @staticmethod
+    def attach_disk_flags(persistent):
+        modified_nodes = set()
 
-        def attach(node, disk_size, bootable=False):
+        def attach(node, disk_size, bootable=False, with_wwn=False):
             nonlocal modified_nodes
-            node.attach_test_disk(disk_size, bootable)
-            modified_nodes.append(node)
+            node.attach_test_disk(disk_size, bootable=bootable, persistent=persistent, with_wwn=with_wwn)
+            modified_nodes.add(node)
 
         yield attach
+        if global_variables.test_teardown:
+            for modified_node in modified_nodes:
+                modified_node.detach_all_test_disks()
 
-        for modified_node in modified_nodes:
-            modified_node.detach_all_test_disks()
+    @pytest.fixture(scope="function")
+    def attach_disk(self):
+        yield from self.attach_disk_flags(persistent=False)
+
+    @pytest.fixture(scope="function")
+    def attach_disk_persistent(self):
+        yield from self.attach_disk_flags(persistent=True)
 
     @pytest.fixture()
     def attach_interface(self):
@@ -202,16 +261,17 @@ class BaseTest:
         assert len(string) == expected_len, "Expected len string of: " + str(expected_len) + \
                                             " rather than: " + str(len(string)) + " String value: " + string
 
-    def collect_test_logs(self, cluster, api_client, test, nodes):
-        log_dir_name = f"{env_variables['log_folder']}/{test.name}"
+    def collect_test_logs(self, cluster, api_client, test: pytest.Function, nodes: Nodes):
+        log_dir_name = f"{global_variables.log_folder}/{test.name}"
         with suppress(ApiException):
             cluster_details = json.loads(json.dumps(cluster.get_details().to_dict(), sort_keys=True, default=str))
-            download_logs(api_client, cluster_details, log_dir_name, test.result_call.failed)
+            download_logs(api_client, cluster_details, log_dir_name, test.result_call.failed,
+                          pull_secret=global_variables.pull_secret)
         self._collect_virsh_logs(nodes, log_dir_name)
         self._collect_journalctl(nodes, log_dir_name)
 
     @classmethod
-    def _collect_virsh_logs(cls, nodes, log_dir_name):
+    def _collect_virsh_logs(cls, nodes: Nodes, log_dir_name):
         logging.info('Collecting virsh logs\n')
         os.makedirs(log_dir_name, exist_ok=True)
         virsh_log_path = os.path.join(log_dir_name, "libvirt_logs")
@@ -245,7 +305,7 @@ class BaseTest:
                                 f"-u libvirtd -D /run/log/journal >> {libvird_log_path}", shell=True)
 
     @staticmethod
-    def _collect_journalctl(nodes, log_dir_name):
+    def _collect_journalctl(nodes: Nodes, log_dir_name):
         logging.info('Collecting journalctl\n')
         infra_utils.recreate_folder(log_dir_name, with_chmod=False, force_recreate=False)
         journal_ctl_path = Path(log_dir_name) / 'nodes_journalctl'
@@ -266,11 +326,15 @@ class BaseTest:
 
     @staticmethod
     def update_oc_config(nodes, cluster):
-        os.environ["KUBECONFIG"] = env_variables['kubeconfig_path']
-        vips = nodes.controller.get_ingress_and_api_vips()
-        api_vip = vips['api_vip']
+        os.environ["KUBECONFIG"] = cluster.config.kubeconfig_path
+        if cluster.config.masters_count == 1:
+            api_vip = cluster.get_ip_for_single_node(cluster.api_client, cluster.id,
+                                                     cluster.get_details().machine_network_cidr)
+        else:
+            vips = nodes.controller.get_ingress_and_api_vips()
+            api_vip = vips['api_vip']
         infra_utils.config_etc_hosts(cluster_name=cluster.name,
-                                     base_dns_domain=env_variables["base_domain"],
+                                     base_dns_domain=global_variables.base_dns_domain,
                                      api_vip=api_vip)
 
     def wait_for_controller(self, cluster, nodes):
@@ -278,7 +342,7 @@ class BaseTest:
         self.update_oc_config(nodes, cluster)
 
         def check_status():
-            res = infra_utils.get_assisted_controller_status(env_variables['kubeconfig_path'])
+            res = infra_utils.get_assisted_controller_status(cluster.config.kubeconfig_path)
             return "Running" in str(res, 'utf-8')
 
         waiting.wait(
@@ -293,5 +357,41 @@ class BaseTest:
         yield create_kube_api_client()
 
     @pytest.fixture()
-    def cluster_deployment_context(self):
-        yield cluster_deployment_context
+    def kube_api_context(self, kube_api_client):
+        kube_api_context = KubeAPIContext(kube_api_client, clean_on_exit=global_variables.test_teardown)
+
+        with kube_api_context:
+            yield kube_api_context
+
+    @pytest.fixture(scope="function")
+    def update_olm_config(self) -> Callable:
+        def update_config(tf_config: TerraformConfig = TerraformConfig(),
+                          cluster_config: ClusterConfig = ClusterConfig(), operators=None):
+            if operators is None:
+                operators = parse_olm_operators_from_env()
+
+            tf_config.worker_memory = resource_param(tf_config.worker_memory,
+                                                     OperatorResource.WORKER_MEMORY_KEY, operators)
+            tf_config.master_memory = resource_param(tf_config.master_memory,
+                                                     OperatorResource.MASTER_MEMORY_KEY, operators)
+            tf_config.worker_vcpu = resource_param(tf_config.worker_vcpu,
+                                                   OperatorResource.WORKER_VCPU_KEY, operators)
+            tf_config.master_vcpu = resource_param(tf_config.master_vcpu,
+                                                   OperatorResource.MASTER_VCPU_KEY, operators)
+            tf_config.workers_count = resource_param(tf_config.workers_count,
+                                                     OperatorResource.WORKER_COUNT_KEY, operators)
+            tf_config.worker_disk = resource_param(tf_config.worker_disk,
+                                                   OperatorResource.WORKER_DISK_KEY, operators)
+            tf_config.master_disk = resource_param(tf_config.master_disk,
+                                                   OperatorResource.MASTER_DISK_KEY, operators)
+            tf_config.master_disk_count = resource_param(tf_config.master_disk_count,
+                                                         OperatorResource.MASTER_DISK_COUNT_KEY, operators)
+            tf_config.worker_disk_count = resource_param(tf_config.worker_disk_count,
+                                                         OperatorResource.WORKER_DISK_COUNT_KEY, operators)
+
+            cluster_config.workers_count = resource_param(cluster_config.workers_count,
+                                                          OperatorResource.WORKER_COUNT_KEY, operators)
+            cluster_config.nodes_count = cluster_config.masters_count + cluster_config.workers_count
+            cluster_config.olm_operators = [operators]
+
+        yield update_config

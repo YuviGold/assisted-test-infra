@@ -1,3 +1,12 @@
+terraform {
+  required_providers {
+    libvirt = {
+      source = "dmacvicar/libvirt"
+      version = "0.6.9"
+    }
+  }
+}
+
 provider "libvirt" {
   uri = var.libvirt_uri
 }
@@ -32,6 +41,7 @@ resource "libvirt_network" "net" {
   autostart = true
 
   dns {
+   local_only = true
    dynamic "hosts" {
       for_each = concat(
       data.libvirt_network_dns_host_template.masters.*.rendered,
@@ -56,6 +66,7 @@ resource "libvirt_network" "secondary_net" {
   mtu = var.libvirt_network_mtu
   autostart = true
   dns {
+    local_only = true
     dynamic "hosts" {
       for_each = concat(
       data.libvirt_network_dns_host_template.masters.*.rendered,
@@ -105,7 +116,13 @@ data "libvirt_network_dns_host_template" "masters_oauth" {
 resource "local_file" "load_balancer_config" {
   count    = var.load_balancer_ip != "" && var.load_balancer_config_file != "" ? 1 : 0
   content  = var.load_balancer_config_file
-  filename = format("/etc/nginx/stream.d/%s.conf", replace(var.load_balancer_ip,"/[:.]/" , "_"))
+  filename = format("/etc/nginx/conf.d/stream_%s.conf", replace(var.load_balancer_ip,"/[:.]/" , "_"))
+}
+
+resource "local_file" "dns_forwarding_config" {
+  count    = var.dns_forwarding_file != "" && var.dns_forwarding_file_name != "" ? 1 : 0
+  content  = var.dns_forwarding_file
+  filename = var.dns_forwarding_file_name
 }
 
 resource "libvirt_domain" "master" {
@@ -210,14 +227,9 @@ resource "libvirt_domain" "worker" {
   }
 
   network_interface {
-    network_name = libvirt_network.net.name
+    network_name = count.index % 2 == 0 ? libvirt_network.net.name : libvirt_network.secondary_net.name
     hostname   = "${var.cluster_name}-worker-${count.index}.${var.cluster_domain}"
-    addresses  = var.libvirt_worker_ips[count.index]
-  }
-
-  network_interface {
-    network_name = libvirt_network.secondary_net.name
-    addresses  = var.libvirt_secondary_worker_ips[count.index]
+    addresses  = count.index % 2 == 0 ? var.libvirt_worker_ips[count.index] : var.libvirt_secondary_worker_ips[count.index]
   }
 
   boot_device{

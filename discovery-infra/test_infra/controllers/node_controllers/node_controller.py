@@ -1,13 +1,20 @@
 from abc import ABC, abstractmethod
-from typing import Dict, List, Any, Tuple
+from typing import List, Any, Tuple, Callable
 
 import libvirt
+
+from test_infra.controllers.node_controllers.disk import Disk
 from test_infra.controllers.node_controllers.node import Node
 
 
 class NodeController(ABC):
+
     @abstractmethod
-    def list_nodes(self) -> Dict[str, Node]:
+    def list_nodes(self) -> List[Node]:
+        pass
+
+    @abstractmethod
+    def list_disks(self, node_name: str) -> List[Disk]:
         pass
 
     @abstractmethod
@@ -39,7 +46,7 @@ class NodeController(ABC):
         pass
 
     @abstractmethod
-    def format_node_disk(self, node_name: str) -> None:
+    def format_node_disk(self, node_name: str, disk_index: int = 0) -> None:
         pass
 
     @abstractmethod
@@ -47,11 +54,14 @@ class NodeController(ABC):
         pass
 
     @abstractmethod
-    def attach_test_disk(self, node_name: str, disk_size: int):
+    def attach_test_disk(self, node_name: str, disk_size: int, bootable=False, persistent=False, with_wwn=False):
         """
         Attaches a test disk. That disk can later be detached with `detach_all_test_disks`
+        :param with_wwn: Weather the disk should have a WWN(World Wide Name), Having a WWN creates a disk by-id link
         :param node_name: Node to attach disk to
         :param disk_size: Size of disk to attach
+        :param bootable: Whether to format an MBR sector at the beginning of the disk
+        :param persistent: Whether the disk should survive shutdowns
         """
         pass
 
@@ -89,6 +99,17 @@ class NodeController(ABC):
 
     @abstractmethod
     def set_boot_order(self, node_name, cd_first=False) -> None:
+
+        pass
+
+    @abstractmethod
+    def set_per_device_boot_order(self, node_name, key: Callable[[Disk], int]) -> None:
+        """
+        Set the boot priority for every disk
+        It sorts the disk according to the key function result
+        :param node_name: The node to change its boot order
+        :param key: a key function that gets a Disk object and decide it's priority
+        """
         pass
 
     @abstractmethod

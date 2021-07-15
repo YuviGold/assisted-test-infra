@@ -1,6 +1,7 @@
 import json
 import logging
 import random
+from pathlib import Path
 from typing import Dict, Iterator, List
 
 from munch import Munch
@@ -8,7 +9,6 @@ from test_infra import utils
 from test_infra.controllers.node_controllers.node import Node
 from test_infra.controllers.node_controllers.node_controller import NodeController
 from test_infra.tools.concurrently import run_concurrently
-from tests.conftest import env_variables
 
 
 class NodeMapping:
@@ -19,16 +19,22 @@ class NodeMapping:
 
 
 class Nodes:
-    def __init__(self, node_controller: NodeController, private_ssh_key_path):
+    DEFAULT_STATIC_IP_CONFIG = False
+
+    def __init__(self, node_controller: NodeController, private_ssh_key_path: Path):
         self.controller = node_controller
         self.private_ssh_key_path = private_ssh_key_path
         self._nodes = None
         self._nodes_as_dict = None
 
     @property
+    def config(self):
+        return self.controller.config
+
+    @property
     def nodes(self) -> List[Node]:
         if not self._nodes:
-            self._nodes = self._list()
+            self._nodes = self.controller.list_nodes()
         return self._nodes
 
     def __getitem__(self, i):
@@ -40,6 +46,10 @@ class Nodes:
     def __iter__(self) -> Iterator[Node]:
         for n in self.nodes:
             yield n
+
+    def drop_cache(self):
+        self._nodes = None
+        self._nodes_as_dict = None
 
     def get_masters(self):
         return [node for node in self.nodes if node.is_master_in_name()]
@@ -53,11 +63,6 @@ class Nodes:
             self._nodes_as_dict = {node.name: node for node in self.nodes}
         return self._nodes_as_dict
 
-    def _list(self):
-        # TODO list_nodes return type is Dict[str, Node] but returns list
-        nodes = self.controller.list_nodes()
-        return [Node(node.name(), self.controller, self.private_ssh_key_path) for node in nodes]
-
     @property
     def setup_time(self):
         return self.controller.setup_time
@@ -68,9 +73,8 @@ class Nodes:
     def shutdown_all(self):
         self.run_for_all_nodes("shutdown")
 
-    def start_all(self):
-        static_ips_config = env_variables.get('static_ips_config')
-        if static_ips_config:
+    def start_all(self, is_static_ip: bool = DEFAULT_STATIC_IP_CONFIG):
+        if is_static_ip:
             skip_ips = False
         else:
             skip_ips = True
@@ -155,25 +159,25 @@ class Nodes:
         mapping = self.create_nodes_cluster_hosts_mapping(cluster=cluster)
         return mapping[node.name].cluster_host
 
-    def get_cluster_hostname(self, cluster_host_object):
+    @staticmethod
+    def get_cluster_hostname(cluster_host_object):
         inventory = json.loads(cluster_host_object["inventory"])
         return inventory["hostname"]
 
-    def set_hostnames(self, cluster):
-        ipv6 = env_variables.get('ipv6')
-        static_ips_config = env_variables.get('static_ips_config')
-        if ipv6 or static_ips_config:
+    def set_hostnames(self, cluster, nodes_count: int, is_ipv6: bool, is_static_ip: bool = False):
+        if is_ipv6 or is_static_ip:
             # When using IPv6 with libvirt, hostnames are not set automatically by DHCP.  Therefore, we must find out
             # the hostnames using terraform's tfstate file. In case of static ip, the hostname is localhost and must be
             # set to valid hostname
             # TODO - NodeController has no `params` and `tf` attributes
             network_name = self.controller.params.libvirt_network_name
-            libvirt_nodes = utils.get_libvirt_nodes_from_tf_state(network_name, self.controller.tf.get_state())
-            nodes_count = env_variables.get('num_nodes')
+            secondary_network_name = self.controller.params.libvirt_secondary_network_name
+            libvirt_nodes = utils.get_libvirt_nodes_from_tf_state([network_name, secondary_network_name],
+                                                                  self.controller.tf.get_state())
             utils.update_hosts(cluster.api_client, cluster.id, libvirt_nodes, update_hostnames=True,
                                update_roles=(nodes_count != 1))
 
     def set_single_node_ip(self, cluster):
-        self.controller.tf.change_variables({"single_node_ip": cluster.get_ip_for_single_node(cluster.api_client,
-                                                                                              cluster.id, env_variables[
-                                                                                                  'machine_cidr'])})
+        self.controller.tf.change_variables(
+            {"single_node_ip": cluster.get_ip_for_single_node(cluster.api_client,
+                                                              cluster.id, self.controller.get_machine_cidr())})

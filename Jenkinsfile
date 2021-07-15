@@ -1,6 +1,3 @@
-String cron_string = BRANCH_NAME == "master" ? "@hourly" : ""
-
-
 pipeline {
     agent { label 'test-infra' }
 
@@ -12,7 +9,7 @@ pipeline {
         string(name: 'CONTROLLER_IMAGE', defaultValue: '', description: 'Controller image to use')
         string(name: 'OPENSHIFT_INSTALL_RELEASE_IMAGE', defaultValue: '', description: 'OCP Release Image from ocpmetal repository in Quay.io')
         string(name: 'OPENSHIFT_VERSION', defaultValue: '', description: 'OCP version going to be installed')
-        string(name: 'OPENSHIFT_VERSIONS', defaultValue: '', description: 'Hashmap of all the supported OCP versions. Defaults in https://github.com/openshift/assisted-service/blob/master/default_ocp_versions.json')
+        string(name: 'OPENSHIFT_VERSIONS', defaultValue: '', description: 'Hashmap of all the supported OCP versions. Defaults in https://github.com/openshift/assisted-service/blob/master/data/default_ocp_versions.json')
         string(name: 'DEPLOY_TAG', defaultValue: '', description: 'Deploy tag')
         string(name: 'NUM_WORKERS', defaultValue: "2", description: 'Number of workers')
         string(name: 'JOB_NAME', defaultValue: "#${BUILD_NUMBER}", description: 'Job name')
@@ -20,16 +17,15 @@ pipeline {
         booleanParam(name: 'POST_DELETE', defaultValue: true, description: 'Whether to delete the cluster on post actions')
     }
 
-    triggers { cron(cron_string) }
-
     environment {
         SKIPPER_PARAMS = " "
         BASE_DNS_DOMAINS = credentials('route53_dns_domain')
         ROUTE53_SECRET = credentials('route53_secret')
         RUN_ID = UUID.randomUUID().toString().take(8)
-        PROFILE = "test-infra-${RUN_ID}"
         NAMESPACE = "test-infra-${RUN_ID}"
         LOGS_DEST = "${WORKSPACE}/cluster_logs"
+        ENABLE_KUBE_API = "false"
+        GENERATE_CRD = "false"
 
         // Credentials
         PULL_SECRET = credentials('assisted-test-infra-pull-secret')
@@ -51,7 +47,7 @@ pipeline {
                 sh "make create_full_environment"
 
                 // Login
-                sh "minikube --profile ${PROFILE} ssh \"docker login --username ${OCPMETAL_CREDS_USR} --password ${OCPMETAL_CREDS_PSW}\""
+                sh "minikube ssh \"docker login --username ${OCPMETAL_CREDS_USR} --password ${OCPMETAL_CREDS_PSW}\""
             }
         }
 
@@ -74,11 +70,8 @@ pipeline {
                 }
 
                 try {
-                    ip = sh(returnStdout: true, script: "minikube ip --profile ${PROFILE}").trim()
-                    minikube_url = "https://${ip}:8443"
-
-                    sh "make download_service_logs KUBECTL='kubectl --server=${minikube_url}'"
-                    sh "make download_cluster_logs ADDITIONAL_PARAMS='--download-all' KUBECTL='kubectl --server=${minikube_url}'"
+                    sh "make download_service_logs"
+                    sh "make download_cluster_logs ADDITIONAL_PARAMS='--download-all'"
                 } finally {
                     if (params.POST_DELETE) {
                         sh "make destroy"

@@ -7,13 +7,17 @@ import sys
 
 import waiting
 import yaml
-from test_infra import utils, consts
-from test_infra.tools.assets import NetworkAssets
-from test_infra.helper_classes.nodes import Nodes
+from test_infra import utils, consts, warn_deprecate
+from test_infra.tools.assets import LibvirtNetworkAssets
 from test_infra.controllers.node_controllers.terraform_controller import TerraformController
 
-from download_logs import download_must_gather
+from download_logs import download_must_gather, gather_sosreport_data
 from oc_utils import get_operators_status
+from test_infra.utils.cluster_name import ClusterName
+from tests.config import TerraformConfig, ClusterConfig
+
+warn_deprecate()
+
 
 BUILD_DIR = "build"
 INSTALL_CONFIG_FILE_NAME = "install-config.yaml"
@@ -25,7 +29,8 @@ EMBED_IMAGE_NAME = "installer-SNO-image.iso"
 KUBE_CONFIG = os.path.join(IBIP_DIR, "auth", "kubeconfig")
 MUST_GATHER_DIR = os.path.join(IBIP_DIR, "must-gather")
 INSTALLER_GATHER_DIR = os.path.join(IBIP_DIR, "installer-gather")
-SOSREPORT_SCRIPT = os.path.join(RESOURCES_DIR, "man_sosreport.sh")
+INSTALLER_GATHER_DEBUG_STDOUT = os.path.join(INSTALLER_GATHER_DIR, "gather.stdout.log")
+INSTALLER_GATHER_DEBUG_STDERR = os.path.join(INSTALLER_GATHER_DIR, "gather.stderr.log")
 SSH_KEY = os.path.join("ssh_key", "key")
 
 
@@ -38,9 +43,15 @@ def installer_generate(openshift_release_image):
 
 @utils.retry(exceptions=Exception, tries=5, delay=30)
 def installer_gather(ip, ssh_key, out_dir):
-    _stdout, stderr, _ret = utils.run_command(
-        f"{INSTALLER_BINARY} gather bootstrap --bootstrap {ip} --master {ip} --key {ssh_key}"
+    stdout, stderr, _ret = utils.run_command(
+        f"{INSTALLER_BINARY} gather bootstrap --log-level debug --bootstrap {ip} --master {ip} --key {ssh_key}"
     )
+
+    with open(INSTALLER_GATHER_DEBUG_STDOUT, "w") as f:
+        f.write(stdout)
+
+    with open(INSTALLER_GATHER_DEBUG_STDERR, "w") as f:
+        f.write(stderr)
 
     matches = re.compile(r'.*logs captured here "(.*)".*').findall(stderr)
 
@@ -114,15 +125,16 @@ def str_presenter(dumper, data):
 
 def create_controller(net_asset):
     return TerraformController(
-        cluster_name="test-infra-cluster",
-        num_masters=1,
-        num_workers=0,
-        master_memory=32 * 1024,  # 32GB of RAM
-        master_vcpu=12,
-        net_asset=net_asset,
-        iso_download_path="<TBD>",  # will be set later on
-        bootstrap_in_place=True,
-        single_node_ip=net_asset.machine_cidr.replace("0/24", "10"),
+        TerraformConfig(
+            masters_count=1,
+            workers_count=0,
+            master_memory=45 * 1024,  # in megabytes
+            master_vcpu=16,
+            net_asset=net_asset,
+            bootstrap_in_place=True,
+            single_node_ip=net_asset.machine_cidr.replace("0/24", "10"),
+        ),
+        cluster_config=ClusterConfig(cluster_name=ClusterName(prefix="test-infra-cluster", suffix=""))
     )
 
 
@@ -146,23 +158,15 @@ def all_operators_up():
         return False
 
 
-def gather_sosreport_data(node):
-    node.upload_file(SOSREPORT_SCRIPT, "/tmp/man_sosreport.sh")
-    node.run_command("chmod a+x /tmp/man_sosreport.sh")
-    node.run_command("sudo /tmp/man_sosreport.sh")
-    node.download_file("/tmp/sosreport.tar.bz2", IBIP_DIR)
-
-
 # noinspection PyBroadException
-def log_collection(controller, vm_ip):
+def log_collection(vm_ip):
     etype, _value, _tb = sys.exc_info()
 
     logging.info(f"Collecting logs after a {('failed', 'successful')[etype is None]} installation")
 
     try:
         logging.info("Gathering sosreport data from host...")
-        node = Nodes(controller, private_ssh_key_path=SSH_KEY)[0]
-        gather_sosreport_data(node)
+        gather_sosreport_data(output_dir=IBIP_DIR, private_ssh_key_path=SSH_KEY)
     except Exception:
         logging.exception("sosreport gathering failed!")
 
@@ -198,7 +202,7 @@ def waiting_for_installation_completion(controller):
                      waiting_for="all operators to get up")
         logging.info("Installation completed successfully!")
     finally:
-        log_collection(controller, vm_ip)
+        log_collection(vm_ip)
 
 
 def execute_ibip_flow(args):
@@ -206,7 +210,7 @@ def execute_ibip_flow(args):
     if not openshift_release_image:
         raise ValueError("os env OPENSHIFT_INSTALL_RELEASE_IMAGE must be provided")
 
-    net_asset = NetworkAssets().get()
+    net_asset = LibvirtNetworkAssets().get()
     controller = create_controller(net_asset)
     setup_files_and_folders(args, net_asset, controller.cluster_name)
 

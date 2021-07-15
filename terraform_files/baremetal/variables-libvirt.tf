@@ -13,6 +13,16 @@ variable "worker_count" {
   description = "Number of workers."
 }
 
+variable "master_disk_count" {
+  type        = number
+  description = "Number of master disks."
+}
+
+variable "worker_disk_count" {
+  type        = number
+  description = "Number of worker disks."
+}
+
 variable "cluster_domain" {
   type        = string
   description = "Cluster domain"
@@ -103,6 +113,11 @@ variable "api_vip" {
   description = "the API virtual IP"
 }
 
+variable "ingress_vip" {
+  type        = string
+  description = "the Ingress virtual IP"
+}
+
 # It's definitely recommended to bump this if you can.
 variable "libvirt_master_memory" {
   type        = string
@@ -117,6 +132,18 @@ variable "libvirt_master_vcpu" {
   type        = string
   description = "CPUs allocated to masters"
   default     = "4"
+}
+
+variable "master_cpu_mode" {
+  type        = string
+  description = "CPUs virtualization flag"
+  default     = "host-passthrough"
+}
+
+variable "worker_cpu_mode" {
+  type        = string
+  description = "CPUs virtualization flag"
+  default     = "host-passthrough"
 }
 
 variable "libvirt_worker_vcpu" {
@@ -178,5 +205,48 @@ variable "static_macs" {
 variable "single_node_ip" {
   description = "IP address of single node.  Used for DNS"
   type = string
+  default = ""
+}
+
+variable "machine_cidr" {
+  description = "IPv4 network from network pool for automated tests"
+  type = string
+  default = ""
+}
+
+variable "machine_cidr6" {
+  description = "IPv6 network from network pool for automated tests"
+  type = string
+  default = ""
+}
+
+variable "provisioning_cidr" {
+  description = "IPv4 provisioning network from network pool for automated tests"
+  type = string
+  default = ""
+}
+
+variable "provisioning_cidr6" {
+  description = "IPv6 provisioning network from network pool for automated tests"
+  type = string
+  default = ""
+}
+
+variable "libvirt_dns_records" {
+  type        = map(string)
+  description = "DNS records to be added to the libvirt network"
+  default = {}
+}
+
+variable "dns_forwarding_file" {
+  type = string
+  description = "Contents of dns forwarding file"
+  default = ""
+}
+
+
+variable "dns_forwarding_file_name" {
+  type = string
+  description = "The file name of dns forwarding file"
   default = ""
 }
