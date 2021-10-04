@@ -23,6 +23,11 @@ variable "machine_cidr_addresses" {
     description = "Addresses for machine CIDR network"
 }
 
+variable "provisioning_cidr_addresses" {
+    type = list(string)
+    description = "Addresses for provisioning CIDR network"
+}
+
 variable "libvirt_uri" {
   type        = string
   description = "libvirt connection URI"

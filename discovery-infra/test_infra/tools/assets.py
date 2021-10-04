@@ -1,16 +1,17 @@
 import json
 import logging
 import os
-import re
-from typing import Dict, List, Optional, Union
 
 import netifaces
+
+from typing import Optional, List, Dict, Union
+
 from munch import Munch
-from netaddr import IPAddress, IPNetwork, IPRange
+from netaddr import IPNetwork, IPRange, IPAddress
 from netaddr.core import AddrFormatError
+
 from test_infra import consts, utils
-from test_infra.controllers.node_controllers.libvirt_controller import \
-    LibvirtController
+from test_infra.controllers.node_controllers.libvirt_controller import LibvirtController
 
 
 class LibvirtNetworkAssets:
@@ -20,8 +21,12 @@ class LibvirtNetworkAssets:
 
     ASSETS_LOCKFILE_DEFAULT_PATH = "/tmp"
     BASE_ASSET = {
-        consts.BaseAsset.ASSET_FIELD_CIDRS: consts.BaseAsset.CIDRS,
-        consts.BaseAsset.ASSET_FIELD_INTERFACES: consts.BaseAsset.NETWORK_INTERFACSE,
+        "machine_cidr": consts.BaseAsset.MACHINE_CIDR,
+        "machine_cidr6": consts.BaseAsset.MACHINE_CIDR6,
+        "provisioning_cidr": consts.BaseAsset.PROVISIONING_CIDR,
+        "provisioning_cidr6": consts.BaseAsset.PROVISIONING_CIDR6,
+        "libvirt_network_if": consts.BaseAsset.NETWORK_IF,
+        "libvirt_secondary_network_if": consts.BaseAsset.SECONDARY_NETWORK_IF,
     }
 
     def __init__(
@@ -66,7 +71,7 @@ class LibvirtNetworkAssets:
 
     @staticmethod
     def _verify_asset_fields(asset: Dict):
-        for field in consts.BaseAsset.REQUIRED_ASSET_FIELDS:
+        for field in consts.REQUIRED_ASSET_FIELDS:
             assert field in asset, f"missing field {field} in asset {asset}"
 
     def _fill_allocated_ips_and_bridges_by_interface(self):
@@ -83,11 +88,11 @@ class LibvirtNetworkAssets:
         for asset in assets_in_use:
             self._verify_asset_fields(asset)
 
-            for cidr in asset[consts.BaseAsset.ASSET_FIELD_CIDRS]:
-                self._add_allocated_ip(IPNetwork(cidr))
+            for ip_network_field in consts.IP_NETWORK_ASSET_FIELDS:
+                self._add_allocated_ip(IPNetwork(asset[ip_network_field]))
 
-            for interface in asset[consts.BaseAsset.ASSET_FIELD_INTERFACES]:
-                self._add_allocated_net_bridge(interface)
+            self._add_allocated_net_bridge(asset["libvirt_network_if"])
+            self._add_allocated_net_bridge(asset["libvirt_secondary_network_if"])
 
     def _fill_virsh_allocated_ips_and_bridges(self):
         with LibvirtController.connection_context() as conn:
@@ -104,13 +109,11 @@ class LibvirtNetworkAssets:
     def _override_ip_networks_values_if_not_free(self, asset: Dict):
         logging.info("IPs in use: %s", self._allocated_ips_objects)
 
-        for cidr in asset[consts.BaseAsset.ASSET_FIELD_CIDRS][:]:
-            ip_network = IPNetwork(cidr)
+        for ip_network_field in consts.IP_NETWORK_ASSET_FIELDS:
+            ip_network = IPNetwork(asset[ip_network_field])
             self._set_next_available_ip_network(ip_network)
             self._add_allocated_ip(ip_network)
-
-            asset[consts.BaseAsset.ASSET_FIELD_CIDRS].remove(cidr)
-            asset[consts.BaseAsset.ASSET_FIELD_CIDRS].append(str(ip_network))
+            asset[ip_network_field] = str(ip_network)
 
     def _set_next_available_ip_network(self, ip_network: IPNetwork):
         while self._is_ip_network_allocated(ip_network):
@@ -144,15 +147,13 @@ class LibvirtNetworkAssets:
     def _override_network_bridges_values_if_not_free(self, asset: Dict):
         logging.info("Bridges in use: %s", self._allocated_bridges)
 
-        for interface in asset[consts.BaseAsset.ASSET_FIELD_INTERFACES][:]:
-            if self._is_net_bridge_allocated(interface):
-                prefix = re.findall(r"(\w+)\d+", interface)
-                assert len(prefix) == 1, "Interfaces names should be in a convention of '<prefix><number>'"
+        if self._is_net_bridge_allocated(asset["libvirt_network_if"]):
+            asset["libvirt_network_if"] = self._get_next_available_net_bridge()
+            self._add_allocated_net_bridge(asset["libvirt_network_if"])
 
-                new_bridge = self._get_next_available_net_bridge(prefix=prefix)
-                asset[consts.BaseAsset.ASSET_FIELD_INTERFACES].remove(interface)
-                asset[consts.BaseAsset.ASSET_FIELD_INTERFACES].append(new_bridge)
-                self._add_allocated_net_bridge(new_bridge)
+        if self._is_net_bridge_allocated(asset["libvirt_secondary_network_if"]):
+            net_bridge = self._get_next_available_net_bridge(prefix="stt")
+            asset["libvirt_secondary_network_if"] = net_bridge
 
     def _get_next_available_net_bridge(self, prefix: str = "tt") -> str:
         index = 0
