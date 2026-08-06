@@ -3,197 +3,232 @@
 #############
 
 SHELL=/bin/sh
-CONTAINER_COMMAND = $(shell if [ -x "$(shell command -v docker)" ];then echo "docker" ; else echo "podman";fi)
-PULL_PARAM=$(shell if [ "${CONTAINER_COMMAND}" = "podman" ];then echo "--pull-always" ; else echo "--pull";fi)
+CONTAINER_COMMAND := $(shell scripts/utils.sh get_container_runtime_command)
+
+# Selecting the right podman-remote version since podman-remote4 cannot work against podman-server3 and vice versa.
+# It must be occurred before any other container related task.
+# Makefile syntax force us to assign the shell result to a variable - please ignore it.
+PODMAN_CLIENT_SELECTION_IGNORE_ME := $(shell scripts/utils.sh select_podman_client)
 
 ROOT_DIR = $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
+PYTHONPATH := ${PYTHONPATH}:${ROOT_DIR}/src
+PATH := ${PATH}:/usr/local/bin
+
 REPORTS = $(ROOT_DIR)/reports
+TEST_SESSION_ID=$(shell mktemp -u "XXXXXXXXX")
+PYTEST_JUNIT_FILE="${REPORTS}/unittest_${TEST_SESSION_ID}.xml"
+PYTEST_FLAGS := $(or ${PYTEST_FLAGS}, --error-for-skips)
 
 SKIPPER_PARAMS ?= -i
 
-# assisted-service
-SERVICE_BRANCH := $(or $(SERVICE_BRANCH), "master")
-SERVICE_REPO := $(or $(SERVICE_REPO), "https://github.com/openshift/assisted-service")
-SERVICE := $(or $(SERVICE), quay.io/ocpmetal/assisted-service:latest)
-SERVICE_NAME := $(or $(SERVICE_NAME),assisted-service)
+# Set ASSISTED_SERVICE_HOST based on deployment mode
+ifeq ($(DEPLOY_TARGET),onprem)
+    ASSISTED_SERVICE_HOST := $(shell bash -c 'source scripts/utils.sh && get_main_ip')
+else
+    ASSISTED_SERVICE_HOST := $(or ${ASSISTED_SERVICE_HOST},$(shell hostname))
+endif
 
-# assisted-installer
-INSTALLER_BRANCH := $(or $(INSTALLER_BRANCH), "master")
-INSTALLER_REPO := $(or $(INSTALLER_REPO), "https://github.com/openshift/assisted-installer")
+# Openshift CI params
+OPENSHIFT_CI := $(or ${OPENSHIFT_CI}, "false")
+JOB_TYPE := $(or ${JOB_TYPE}, "")
+REPO_NAME := $(or ${REPO_NAME}, "")
+PULL_NUMBER := $(or ${PULL_NUMBER}, "")
+
+CONTAINER_RUNTIME_COMMAND := $(or ${CONTAINER_COMMAND}, ${CONTAINER_RUNTIME_COMMAND})
+
+# lint
+LINT_CODE_STYLING_DIRS := src/tests src/triggers src/assisted_test_infra/test_infra src/assisted_test_infra/download_logs src/service_client src/consts src/virsh_cleanup src/cli
+
+# assisted-service
+SERVICE := $(or $(SERVICE), quay.io/edge-infrastructure/assisted-service:latest)
+SERVICE_NAME := $(or $(SERVICE_NAME),assisted-service)
+INDEX_IMAGE := $(or ${INDEX_IMAGE},quay.io/edge-infrastructure/assisted-service-index:latest)
+REMOTE_SERVICE_URL := $(or $(REMOTE_SERVICE_URL), "")
+USE_LOCAL_SERVICE := $(or $(USE_LOCAL_SERVICE), false)
+DEBUG_SERVICE := $(or $(DEBUG_SERVICE), "")
+
+# terraform
+TF_LOG_PATH=$(REPORTS)/terraform_$(TEST_SESSION_ID).log
+TF_LOG=json
 
 # ui service
-UI_SERVICE_NAME := $(or $(UI_SERVICE_NAME),ocp-metal-ui)
+UI_SERVICE_NAME := $(or $(UI_SERVICE_NAME),assisted-installer-ui)
 
 # Monitoring services
 PROMETHEUS_SERVICE_NAME := $(or $(PROMETHEUS_SERVICE_NAME),prometheus-k8s)
-
-# nodes params
-ISO := $(or $(ISO), "") # ISO should point to a file that has the '.iso' extension. Otherwise deploy will fail!
-NUM_MASTERS :=  $(or $(NUM_MASTERS),3)
-WORKER_MEMORY ?= 8892
-MASTER_MEMORY ?= 16984
-NUM_WORKERS := $(or $(NUM_WORKERS),0)
-NUM_DAY2_WORKERS := $(or $(NUM_DAY2_WORKERS),1)
-STORAGE_POOL_PATH := $(or $(STORAGE_POOL_PATH), $(PWD)/storage_pool)
-CLUSTER_ID := $(or $(CLUSTER_ID), "")
-CLUSTER_NAME := $(or $(CLUSTER_NAME),test-infra-cluster)
-REMOTE_SERVICE_URL := $(or $(REMOTE_SERVICE_URL), "")
-WORKER_DISK ?= 21474836480
-MASTER_DISK ?= 128849018880
 
 # network params
 NAMESPACE := $(or $(NAMESPACE),assisted-installer)
 BASE_DNS_DOMAINS := $(or $(BASE_DNS_DOMAINS), "")
 BASE_DOMAIN := $(or $(BASE_DOMAIN),redhat.com)
-NETWORK_CIDR := $(or $(NETWORK_CIDR), "")
-NETWORK_MTU := $(or $(NETWORK_MTU), 1500)
-HTTP_PROXY_URL := $(or $(HTTP_PROXY_URL), "")
-HTTPS_PROXY_URL := $(or $(HTTPS_PROXY_URL), "")
-NO_PROXY_VALUES := $(or $(NO_PROXY_VALUES), "")
-VIP_DHCP_ALLOCATION := $(or $(VIP_DHCP_ALLOCATION),yes)
-IPv4 := $(or $(IPv4),yes)
-IPv6 := $(or $(IPv6), "")
-ISO_IMAGE_TYPE := $(or $(ISO_IMAGE_TYPE), full-iso)
-
-#day2 params
-API_VIP_IP := $(or $(API_VIP_IP),"")
-API_VIP_DNSNAME := $(or $(API_VIP_DNSNAME),"")
 
 # secrets
-SSH_PUB_KEY := $(or $(SSH_PUB_KEY),$(shell cat ssh_key/key.pub))
+SSH_PUB_KEY := $(or $(SSH_PUB_KEY),$(shell cat ~/.ssh/id_rsa.pub))
 PULL_SECRET :=  $(or $(PULL_SECRET), $(shell if ! [ -z "${PULL_SECRET_FILE}" ];then cat ${PULL_SECRET_FILE};fi))
 ROUTE53_SECRET := $(or $(ROUTE53_SECRET), "")
+OFFLINE_TOKEN := $(or $(OFFLINE_TOKEN), "")
+SERVICE_ACCOUNT_CLIENT_ID := $(or $(SERVICE_ACCOUNT_CLIENT_ID), "")
+SERVICE_ACCOUNT_CLIENT_SECRET := $(or $(SERVICE_ACCOUNT_CLIENT_SECRET), "")
+OCM_CLI_REFRESH_TOKEN := $(or $(OCM_CLI_REFRESH_TOKEN), "")
 
 # deploy
-IMAGE_TAG := latest
-
 DEPLOY_TAG := $(or $(DEPLOY_TAG), "")
 DEPLOY_MANIFEST_PATH := $(or $(DEPLOY_MANIFEST_PATH), "")
 DEPLOY_MANIFEST_TAG := $(or $(DEPLOY_MANIFEST_TAG), "")
-SERVICE_REPLICAS_COUNT := 3
+IMAGE_NAME=assisted-test-infra
+LOAD_BALANCER_TYPE := $(or $(LOAD_BALANCER_TYPE), "cluster-managed")
 
-IMAGE_NAME=test-infra
-IMAGE_REG_NAME=quay.io/itsoiref/$(IMAGE_NAME)
+# validate folder
+ifeq ($(CURDIR), /root/assisted-test-infra)
+    $(error "assisted-test-infra cannot be run directly from /root - it will break the build image mounts and fail to run")
+endif
 
 # oc deploy
-KUBECONFIG := $(or $(KUBECONFIG),${HOME}/.kube/config)
 ifneq ($(or $(OC_MODE),),)
-        OC_FLAG := --oc-mode
-        OC_TOKEN := $(or $(OC_TOKEN),"")
-        OC_SERVER := $(or $(OC_SERVER),https://api.ocp.prod.psi.redhat.com:6443)
-        OC_SCHEME := $(or $(OC_SCHEME),http)
-        OC_PARAMS = $(OC_FLAG) -oct $(OC_TOKEN) -ocs $(OC_SERVER) --oc-scheme $(OC_SCHEME)
+	OC_FLAG := --oc-mode
+	OC_TOKEN := $(or $(OC_TOKEN),"")
+	OC_SERVER := $(or $(OC_SERVER),https://api.ocp.prod.psi.redhat.com:6443)
+	OC_SCHEME := $(or $(OC_SCHEME),http)
+	OC_PARAMS = $(OC_FLAG) -oct $(OC_TOKEN) -ocs $(OC_SERVER) --oc-scheme $(OC_SCHEME)
 endif
 
 ifdef KEEP_ISO
     KEEP_ISO_FLAG = --keep-iso
 endif
 
-PROXY := $(or $(PROXY),no)
+ifdef DEBUG
+	ifeq ($(DEBUG),pycharm)
+	REMOTE_IDE_ADDR:=$(shell echo ${SSH_CLIENT} | cut -f 1 -d " ")
+	DEBUG_FLAGS=-m pycharm_remote_debugger -r $(REMOTE_IDE_ADDR) -p 6789
+	endif
+
+	ifeq ($(DEBUG),$(filter $(DEBUG),vscode true))
+		DEBUG_FLAGS=-m debugpy --listen 0.0.0.0:5678 --wait-for-client
+	endif
+endif
 
 SSO_URL := $(or $(SSO_URL), https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token)
 OCM_BASE_URL := $(or $(OCM_BASE_URL), https://api.integration.openshift.com/)
-# minikube profile is used to manage multiple minikube instances
-PROFILE := $(or $(PROFILE),minikube)
-DEPLOY_TARGET := $(or $(DEPLOY_TARGET),minikube)
-OCP_KUBECONFIG := $(or $(OCP_KUBECONFIG),build/kubeconfig)
-CONTROLLER_OCP := $(or ${CONTROLLER_OCP},quay.io/ocpmetal/assisted-installer-controller-ocp:latest)
 
-PLATFORM := $(or ${PLATFORM},baremetal)
+DEPLOY_TARGET := $(or $(DEPLOY_TARGET),kind)
+OCP_KUBECONFIG := $(or $(OCP_KUBECONFIG),build/kubeconfig)
+
+IPV6_SUPPORT := $(or ${IPV6_SUPPORT},true)
+SERVICE_REPLICAS_COUNT := 3
+LSO_DISKS := $(shell echo sd{b..d})
+AUTH_TYPE := $(or ${AUTH_TYPE},none)
+ENABLE_KUBE_API := $(or ${ENABLE_KUBE_API},false)
+ifeq ($(ENABLE_KUBE_API),true)
+	SERVICE_REPLICAS_COUNT=1
+	AUTH_TYPE=local
+endif
 
 .EXPORT_ALL_VARIABLES:
 
 
-.PHONY: image_build run destroy start_minikube delete_minikube run destroy deploy_assisted_service create_environment delete_all_virsh_resources _download_iso _deploy_assisted_service _deploy_nodes  _destroy_terraform
+.PHONY: image_build run destroy start_minikube delete_minikube deploy_assisted_service deploy_assisted_operator delete_all_virsh_resources _deploy_assisted_service _destroy_terraform create_hub_cluster delete_hub_cluster delete_kind delete_onprem
 
 ###########
 # General #
 ###########
 
-all: create_full_environment run_full_flow_with_install
+all: setup run deploy_nodes_with_install
 
-
-destroy: destroy_nodes delete_minikube_profile kill_port_forwardings delete_podman_localhost stop_load_balancer
+destroy: destroy_nodes delete_minikube delete_kind destroy_host_port_forwarding_and_firewall delete_onprem stop_load_balancer
 
 ###############
 # Environment #
 ###############
-create_full_environment:
-	./create_full_environment.sh
+setup:
+	./scripts/create_full_environment.sh
 
-create_environment: image_build bring_assisted_service start_minikube
+create_environment: image_build bring_assisted_service create_hub_cluster
 
-image_build:
-	sed 's/^FROM .*assisted-service.*:latest/FROM $(subst /,\/,${SERVICE})/' Dockerfile.test-infra | \
-	 $(CONTAINER_COMMAND) build --network=host ${PULL_PARAM} -t $(IMAGE_NAME):$(IMAGE_TAG) -f- .
+image_build: bring_assisted_service generate_python_client
+	$(CONTAINER_COMMAND) build --network=host -t $(IMAGE_NAME) -f Dockerfile.assisted-test-infra .
+	$(CONTAINER_COMMAND) tag $(IMAGE_NAME) test-infra:latest  # For backwards computability
+
+create_hub_cluster:
+	TARGET=${DEPLOY_TARGET} assisted-service/hack/hub_cluster.sh create
+
+delete_hub_cluster:
+	(cd assisted-service && TARGET=${DEPLOY_TARGET} ROOT_DIR=${ROOT_DIR}/assisted-service hack/hub_cluster.sh delete)
 
 clean:
-	-rm -rf build assisted-service test_infra.log
-	-find -name '*.pyc' -delete
-	-find -name '*pycache*' -delete
+	-python3 ./src/cleanup.py
+
+delete_kind:
+	DEPLOY_TARGET=kind $(MAKE) delete_hub_cluster
+
+delete_onprem:
+	DEPLOY_TARGET=onprem $(MAKE) delete_hub_cluster
 
 ############
 # Minikube #
 ############
 
 start_minikube:
-	scripts/run_minikube.sh
-	eval $(minikube docker-env)
+	DEPLOY_TARGET=minikube $(MAKE) create_hub_cluster
+
+delete_clusters:
+	TEST=./src/tests/test_targets.py TEST_FUNC=test_delete_clusters $(MAKE) test
 
 delete_minikube:
 	skipper run python3 scripts/indexer.py --action del --namespace all $(OC_FLAG)
-	minikube delete --all
-	skipper run discovery-infra/virsh_cleanup.py -m
-
-delete_minikube_profile:
-	skipper run python3 scripts/indexer.py --action del --namespace $(NAMESPACE) $(OC_FLAG)
-	minikube delete -p $(PROFILE)
-
-####################
-# Podman localhost #
-####################
-
-delete_podman_localhost:
-	make -C assisted-service/ clean-onprem || true
+	DEPLOY_TARGET=minikube $(MAKE) delete_hub_cluster
+	skipper run "python3 -m virsh_cleanup"
 
 ####################
 # Load balancer    #
 ####################
 
-start_load_balancer:
-	# Start load balancer if it does not already exist.  Map the directory $(HOME)/.test-infra/etc/nginx/stream.d to be /etc/nginx/stream.d so it will be used by the python code to fill up load balancing definitions
-	if [ "$(PLATFORM)" = "none" ] ; then id=`podman ps --quiet --filter "name=load_balancer"` ; ( test -z "$$id" && podman run -d --rm --net=host --name=load_balancer -v $(HOME)/.test-infra/etc/nginx/stream.d:/etc/nginx/stream.d load_balancer:latest ) || ! test -z "$$id" ; fi
+# Start load balancer if it does not already exist.
+# Map the directory $(HOME)/.test-infra/etc/nginx/conf.d to be /etc/nginx/conf.d
+# so it will be used by the python code to fill up load balancing definitions
+start_load_balancer: stop_load_balancer
+	@if [ "$(PLATFORM)" = "none"  ] || [ "$(PLATFORM)" = "external"  ] || [ "${LOAD_BALANCER_TYPE}" = "user-managed" ] || [ "$(START_LOAD_BALANCER)" = "true" ]; then \
+		id=$(shell $(CONTAINER_COMMAND) ps --quiet --filter "name=load_balancer"); \
+		( test -z "$$id" && echo "Starting load balancer ..." && \
+		$(CONTAINER_COMMAND) run -d --rm --dns=127.0.0.1 --net=host --name=load_balancer \
+			-v $(HOME)/.test-infra/etc/nginx/conf.d:/etc/nginx/conf.d \
+			quay.io/edge-infrastructure/dynamic-load-balancer:latest ) || ! test -z "$$id"; \
+	fi
 
 stop_load_balancer:
-	id=`podman ps --quiet --filter "name=load_balancer"`; test ! -z "$$id"  && podman rm -f load_balancer ; rm -f  $(HOME)/.test-infra/etc/nginx/stream.d/*.conf >& /dev/null || /bin/true
+	@id=$(shell $(CONTAINER_COMMAND) ps --all --quiet --filter "name=load_balancer"); \
+	test ! -z "$$id"  && $(CONTAINER_COMMAND) rm -f load_balancer; \
+	if [ "$(TEST_TEARDOWN)" != "false" ]; then \
+		rm -f  $(HOME)/.test-infra/etc/nginx/conf.d/*.conf >& /dev/null || /bin/true; \
+	fi
+
 
 #############
 # Terraform #
 #############
 
-copy_terraform_files:
-	mkdir -p build/terraform/$(CLUSTER_NAME)__$(NAMESPACE)
-	FILE=build/terraform/$(CLUSTER_NAME)__$(NAMESPACE)/terraform.tfvars.json
-	cp -r terraform_files/* build/terraform/$(CLUSTER_NAME)__$(NAMESPACE);\
-
-run_terraform: copy_terraform_files
-	skipper make $(SKIPPER_PARAMS) _run_terraform
-
-_run_terraform:
-		cd build/terraform/$(CLUSTER_NAME)__$(NAMESPACE) && \
-		terraform init -plugin-dir=/root/.terraform.d/plugins/ && \
-		terraform apply -auto-approve -input=false -state=terraform.tfstate -state-out=terraform.tfstate -var-file=terraform.tfvars.json
-
 _apply_terraform:
-		cd build/terraform/$(CLUSTER_NAME)__$(NAMESPACE) && \
+		cd build/terraform/$(CLUSTER_NAME)/$(PLATFORM) && \
 		terraform apply -auto-approve -input=false -state=terraform.tfstate -state-out=terraform.tfstate -var-file=terraform.tfvars.json
-
-destroy_terraform:
-	skipper make $(SKIPPER_PARAMS) _destroy_terraform
 
 _destroy_terraform:
-	cd build/terraform/  && terraform destroy -auto-approve -input=false -state=terraform.tfstate -state-out=terraform.tfstate -var-file=terraform.tfvars.json || echo "Failed cleanup terraform"
-	discovery-infra/virsh_cleanup.py -f test-infra
+	cd build/terraform/$(CLUSTER_NAME)/$(PLATFORM) && \
+	terraform destroy -auto-approve -input=false -state=terraform.tfstate -state-out=terraform.tfstate -var-file=terraform.tfvars.json
+
+destroy_nodes:
+	skipper make $(SKIPPER_PARAMS) _destroy_virsh
+
+_destroy_virsh:
+	python3 ${DEBUG_FLAGS} -m virsh_cleanup -f test-infra
+
+destroy_terraform_controller:
+	TEST=./src/tests/test_targets.py TEST_FUNC=test_destroy_available_terraform $(MAKE) test;
+
+
+destroy_nutanix:
+	PLATFORM=nutanix make destroy_terraform_controller
+
+destroy_vsphere:
+	PLATFORM=vsphere make destroy_terraform_controller
 
 #######
 # Run #
@@ -204,25 +239,17 @@ validate_namespace:
 
 run: validate_namespace deploy_assisted_service deploy_ui
 
-run_full_flow: run deploy_nodes set_dns
-
-redeploy_all: destroy run_full_flow
-
-run_full_flow_with_install: run deploy_nodes_with_install set_dns
-
-redeploy_all_with_install: destroy run_full_flow_with_install
-
 set_dns:
 	scripts/assisted_deployment.sh set_dns $(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG))
 
-deploy_ui: start_minikube
-	DEPLOY_TAG=$(DEPLOY_TAG) NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) DEPLOY_MANIFEST_PATH=$(DEPLOY_MANIFEST_PATH) DEPLOY_MANIFEST_TAG=$(DEPLOY_MANIFEST_TAG) scripts/deploy_ui.sh
+deploy_ui: create_hub_cluster
+	NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) scripts/deploy_ui.sh
 
 deploy_prometheus_ui:
-	DEPLOY_TAG=$(DEPLOY_TAG) NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) DEPLOY_MANIFEST_PATH=$(DEPLOY_MANIFEST_PATH) DEPLOY_MANIFEST_TAG=$(DEPLOY_MANIFEST_TAG) scripts/deploy_prometheus_ui.sh
+	NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) scripts/deploy_prometheus_ui.sh
 
 test_ui: deploy_ui
-	DEPLOY_TAG=$(DEPLOY_TAG) DEPLOY_MANIFEST_PATH=$(DEPLOY_MANIFEST_PATH) DEPLOY_MANIFEST_TAG=$(DEPLOY_MANIFEST_TAG) PULL_SECRET=${PULL_SECRET} scripts/test_ui.sh
+	scripts/test_ui.sh
 
 kill_port_forwardings:
 	scripts/utils.sh kill_port_forwardings '$(NAMESPACE)'
@@ -231,142 +258,93 @@ kill_all_port_forwardings:
 	scripts/utils.sh kill_port_forwardings '$(SERVICE_NAME) $(UI_SERVICE_NAME)'
 	scripts/utils.sh kill_port_forwardings '$(SERVICE_NAME) $(PROMETHEUS_SERVICE_NAME)'
 
-########
-# IPv6 #
-########
-run_full_flow_with_ipv6:
-	PULL_SECRET='$(PULL_SECRET)' IPv6=yes IPv4=no VIP_DHCP_ALLOCATION=no PROXY=yes $(MAKE) run_full_flow
-
-
-#########
-# Day 2 #
-#########
-
-deploy_on_ocp_cluster: bring_assisted_installer
-	# service
-	DEPLOY_TARGET=ocp NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE)) \
-		DEPLOY_TAG=$(DEPLOY_TAG) DEPLOY_MANIFEST_TAG=$(DEPLOY_MANIFEST_TAG) OCP_KUBECONFIG=$(OCP_KUBECONFIG) \
-		PROFILE=$(PROFILE) SERVICE=$(SERVICE) \
-		scripts/deploy_assisted_service.sh
-
-	# UI
-	DEPLOY_TARGET=ocp NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE)) \
-		DEPLOY_TAG=$(DEPLOY_TAG) DEPLOY_MANIFEST_TAG=$(DEPLOY_MANIFEST_TAG) OCP_KUBECONFIG=$(OCP_KUBECONFIG) PROFILE=$(PROFILE) \
-		scripts/deploy_ui.sh
-
-	# controller
-	DEPLOY_TARGET=ocp NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE)) \
-		DEPLOY_TAG=$(DEPLOY_TAG) DEPLOY_MANIFEST_TAG=$(DEPLOY_MANIFEST_TAG) OCP_KUBECONFIG=$(OCP_KUBECONFIG) \
-		PROFILE=$(PROFILE) CONTROLLER_OCP=$(CONTROLLER_OCP) \
-		scripts/deploy_controller.sh
-
-config_etc_hosts_for_ocp_cluster:
-	discovery-infra/ocp.py --config-etc-hosts -cn $(CLUSTER_NAME) -ns $(NAMESPACE) --service-name $(SERVICE_NAME) --profile $(PROFILE) $(ADDITIONAL_PARAMS)
-
-bring_assisted_installer:
-	@if cd assisted-installer >/dev/null 2>&1; then git fetch --all && git reset --hard origin/$(INSTALLER_BRANCH); else git clone --branch $(INSTALLER_BRANCH) $(INSTALLER_REPO);fi
-
-###########
-# Cluster #
-###########
-
-_install_cluster:
-	discovery-infra/install_cluster.py -id $(CLUSTER_ID) -ps '$(PULL_SECRET)' --service-name $(SERVICE_NAME) $(OC_PARAMS) -ns $(NAMESPACE) -cn $(CLUSTER_NAME) --profile $(PROFILE)
-
-install_cluster:
-	skipper make $(SKIPPER_PARAMS) _install_cluster NAMESPACE=$(NAMESPACE)
+destroy_host_port_forwarding_and_firewall:
+	scripts/utils.sh delete_all_port_forwarding
+	firewall-cmd --reload || true
 
 
 #########
 # Nodes #
 #########
 
-_deploy_nodes:
-	discovery-infra/start_discovery.py -i $(ISO) -n $(NUM_MASTERS) -p $(STORAGE_POOL_PATH) -k '$(SSH_PUB_KEY)' -md $(MASTER_DISK) -wd $(WORKER_DISK) -mm $(MASTER_MEMORY) -wm $(WORKER_MEMORY) -nw $(NUM_WORKERS) -ps '$(PULL_SECRET)' -bd $(BASE_DOMAIN) -cN $(CLUSTER_NAME) -vN $(NETWORK_CIDR) -nM $(NETWORK_MTU) -iU $(REMOTE_SERVICE_URL) -id $(CLUSTER_ID) -mD $(BASE_DNS_DOMAINS) -ns $(NAMESPACE) -pX $(HTTP_PROXY_URL) -sX $(HTTPS_PROXY_URL) -nX $(NO_PROXY_VALUES) --service-name $(SERVICE_NAME) --vip-dhcp-allocation $(VIP_DHCP_ALLOCATION) --profile $(PROFILE) --ns-index $(NAMESPACE_INDEX) --deploy-target $(DEPLOY_TARGET) $(DAY1_PARAMS) $(OC_PARAMS) $(KEEP_ISO_FLAG) $(ADDITIONAL_PARAMS) $(DAY2_PARAMS) -ndw $(NUM_DAY2_WORKERS) --ipv4 $(IPv4) --ipv6 $(IPv6) --platform $(PLATFORM) --proxy $(PROXY) --iso-image-type $(ISO_IMAGE_TYPE)
-
 deploy_nodes_with_install: start_load_balancer
-	bash scripts/utils.sh local_setup_before_deployment $(PLATFORM) $(NAMESPACE) $(OC_FLAG)
-	skipper make $(SKIPPER_PARAMS) _deploy_nodes NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) NAMESPACE=$(NAMESPACE) ADDITIONAL_PARAMS="'-in ${ADDITIONAL_PARAMS}'" $(SKIPPER_PARAMS) DAY1_PARAMS=--day1-cluster
-
-
-deploy_static_ips_nodes_with_install:
-	make deploy_nodes_with_install ADDITIONAL_PARAMS="'--with-static-ips'"
+	@if [ "$(ENABLE_KUBE_API)" = "false"  ]; then \
+		TEST_TEARDOWN=no TEST=./src/tests/test_targets.py TEST_FUNC=test_target_install_with_deploy_nodes $(MAKE) test; \
+	else \
+	    tput setaf 1; echo "Not implemented"; tput sgr0; exit 1; \
+	fi
 
 deploy_nodes: start_load_balancer
-	bash scripts/utils.sh local_setup_before_deployment $(PLATFORM) $(NAMESPACE) $(OC_FLAG)
-	skipper make $(SKIPPER_PARAMS) _deploy_nodes NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) NAMESPACE=$(NAMESPACE) ADDITIONAL_PARAMS=$(ADDITIONAL_PARAMS) DAY1_PARAMS=--day1-cluster
+	TEST_TEARDOWN=no TEST=./src/tests/test_targets.py TEST_FUNC=test_target_deploy_nodes $(MAKE) test
 
-deploy_static_ips_nodes:
-	make deploy_nodes ADDITIONAL_PARAMS="'--with-static-ips'"
+deploy_nodes_oci: start_load_balancer
+	TEST_TEARDOWN=no TEST=./src/tests/test_targets.py TEST_FUNC=test_target_oci_deploy_nodes $(MAKE) test
 
-deploy_day2_nodes:
-	skipper make $(SKIPPER_PARAMS) _deploy_nodes NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) NAMESPACE=$(NAMESPACE) $(SKIPPER_PARAMS) ADDITIONAL_PARAMS="'--day2-cloud-cluster'"
+destroy_nodes_oci: start_load_balancer
+	TEST_TEARDOWN=no TEST=./src/tests/test_targets.py TEST_FUNC=test_target_oci_destroy_nodes $(MAKE) test
 
-deploy_day2_cloud_nodes_with_install:
-	skipper make $(SKIPPER_PARAMS) _deploy_nodes NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) NAMESPACE=$(NAMESPACE) $(SKIPPER_PARAMS) ADDITIONAL_PARAMS="'-in --day2-cloud-cluster ${ADDITIONAL_PARAMS}'" DEPLOY_TARGET=minikube
+deploy_nodes_with_networking: start_load_balancer
+	TEST_TEARDOWN=no TEST=./src/tests/test_targets.py TEST_FUNC=test_target_deploy_networking_with_nodes $(MAKE) test
 
-deploy_day2_ocp_nodes_with_install:
-	skipper make $(SKIPPER_PARAMS) _deploy_nodes NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) NAMESPACE=$(NAMESPACE) $(SKIPPER_PARAMS) ADDITIONAL_PARAMS="'-in --day2-ocp-cluster'" DEPLOY_TARGET=ocp
+deploy_static_network_config_nodes:
+	make deploy_nodes_with_networking ADDITIONAL_PARAMS="'--with-static-network-config'"
 
-install_day1_and_day2_cloud:
-	skipper make $(SKIPPER_PARAMS) _deploy_nodes NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) NAMESPACE=$(NAMESPACE) $(SKIPPER_PARAMS) ADDITIONAL_PARAMS="'-in --day2-cloud-cluster --day1-cluster ${ADDITIONAL_PARAMS}'"
+deploy_s390x_kvm_nodes_with_install:
+	$(MAKE) test TEST_TEARDOWN=no TEST=./src/tests/test_targets.py TEST_FUNC=test_target_deploy_s390x_kvm_nodes_with_install
 
-destroy_nodes:
-	skipper run $(SKIPPER_PARAMS) 'discovery-infra/delete_nodes.py -iU $(REMOTE_SERVICE_URL) -id $(CLUSTER_ID) -ns $(NAMESPACE) --service-name $(SERVICE_NAME) --profile $(PROFILE) -cn $(CLUSTER_NAME) $(OC_PARAMS)'
-	rm -rf build/terraform/$(CLUSTER_NAME)__$(NAMESPACE)
-
-destroy_all_nodes_from_namespaces:
-	skipper run $(SKIPPER_PARAMS) 'discovery-infra/delete_nodes.py -iU $(REMOTE_SERVICE_URL) -id $(CLUSTER_ID) -cn $(CLUSTER_NAME) --service-name $(SERVICE_NAME) $(OC_PARAMS) -ns all'
-
-destroy_all_nodes:
-	skipper run $(SKIPPER_PARAMS) 'discovery-infra/delete_nodes.py --delete-all'
-
-deploy_ibip: _test_setup
-ifdef SKIPPER_USERNAME
-	$(error Running this target using skipper is not supported, try `make deploy_ibip` instead)
-endif
-	skipper make $(SKIPPER_PARAMS) _deploy_nodes $(SKIPPER_PARAMS) ADDITIONAL_PARAMS="'--bootstrap-in-place'" NUM_WORKERS=0 NUM_MASTERS=1 NAMESPACE_INDEX=0
-
-redeploy_nodes: destroy_nodes deploy_nodes
+redeploy_nodes: destroy_nodes deploy_nodes_with_networking
 
 redeploy_nodes_with_install: destroy_nodes deploy_nodes_with_install
+
+############
+# Operator #
+############
+
+clear_operator:
+	DISKS="${LSO_DISKS}" ./assisted-service/deploy/operator/destroy.sh
+
+deploy_assisted_operator: clear_operator
+	$(MAKE) start_load_balancer START_LOAD_BALANCER=true
+	NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) DEPLOY_TARGET=operator ./scripts/deploy_assisted_service.sh
 
 #############
 # Inventory #
 #############
 
-deploy_assisted_service: start_minikube bring_assisted_service
+deploy_assisted_service: bring_assisted_service create_hub_cluster
 	mkdir -p assisted-service/build
-	DEPLOY_TAG=$(DEPLOY_TAG) NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) DEPLOY_MANIFEST_PATH=$(DEPLOY_MANIFEST_PATH) DEPLOY_MANIFEST_TAG=$(DEPLOY_MANIFEST_TAG) scripts/deploy_assisted_service.sh
+	DEPLOY_TAG=$(DEPLOY_TAG) CONTAINER_COMMAND=$(CONTAINER_COMMAND) NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) AUTH_TYPE=$(AUTH_TYPE) DEBUG_FLAGS="${DEBUG_FLAGS}" scripts/deploy_assisted_service.sh
 
 bring_assisted_service:
-	@if cd assisted-service >/dev/null 2>&1; then git fetch --all && git reset --hard origin/$(SERVICE_BRANCH); else git clone --branch $(SERVICE_BRANCH) $(SERVICE_REPO);fi
+	./scripts/bring_assisted_service.sh
 
 deploy_monitoring: bring_assisted_service
-	make -C assisted-service/ deploy-monitoring NAMESPACE=$(NAMESPACE) PROFILE=$(PROFILE)
+	ROOT_DIR=$(realpath assisted-service/) make -C assisted-service/ deploy-monitoring
 	make deploy_prometheus_ui
 
-delete_all_virsh_resources: destroy_all_nodes delete_minikube kill_all_port_forwardings
-	skipper run $(SKIPPER_PARAMS) 'discovery-infra/delete_nodes.py -ns $(NAMESPACE) -a'
+delete_all_virsh_resources: destroy_nodes delete_minikube kill_all_port_forwardings
 
 download_service_logs:
-	./scripts/download_logs.sh download_service_logs
+	JUNIT_REPORT_DIR=$(REPORTS) ./scripts/download_logs.sh download_service_logs
 
 download_cluster_logs:
-	./scripts/download_logs.sh download_cluster_logs
+	JUNIT_REPORT_DIR=$(REPORTS) ./scripts/download_logs.sh download_cluster_logs
+
+download_capi_logs:
+	JUNIT_REPORT_DIR=$(REPORTS) ./scripts/download_logs.sh download_capi_logs
 
 #######
 # ISO #
 #######
 
-_download_iso:
-	discovery-infra/start_discovery.py -k '$(SSH_PUB_KEY)'  -ps '$(PULL_SECRET)' -bd $(BASE_DOMAIN) -cN $(CLUSTER_NAME) -pX $(HTTP_PROXY_URL) -sX $(HTTPS_PROXY_URL) -nX $(NO_PROXY_VALUES) -iU $(REMOTE_SERVICE_URL) -id $(CLUSTER_ID) -mD $(BASE_DNS_DOMAINS) -ns $(NAMESPACE) --service-name $(SERVICE_NAME) --profile $(PROFILE) --ns-index $(NAMESPACE_INDEX) $(OC_PARAMS) -iO --day1-cluster
-
 download_iso:
-	skipper make $(SKIPPER_PARAMS) _download_iso NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) NAMESPACE=$(NAMESPACE)
+	$(MAKE) test TEST_TEARDOWN=no TEST=./src/tests/test_targets.py TEST_FUNC=test_target_download_iso
 
-download_iso_for_remote_use: deploy_assisted_service
-	skipper make $(SKIPPER_PARAMS) _download_iso NAMESPACE_INDEX=$(shell bash scripts/utils.sh get_namespace_index $(NAMESPACE) $(OC_FLAG)) $(OC_FLAG)) NAMESPACE=$(NAMESPACE)
+###################
+# infra_env files #
+###################
+download_ipxe:
+	$(MAKE) test TEST_TEARDOWN=no TEST=./src/tests/test_targets.py TEST_FUNC=test_target_download_ipxe_script
 
 ########
 # Test #
@@ -376,26 +354,86 @@ $(REPORTS):
 	-mkdir -p $(REPORTS)
 
 lint:
-	mkdir -p build
-	skipper make _lint
+	make _flake8
 
-_lint:
-	pre-commit run --all-files
+# Lint all bash scripts under scripts/sno-ip-change with shellcheck
+.PHONY: bash_lint
+bash_lint:
+	@command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck not found. Please install it (e.g., dnf install -y ShellCheck or apt install -y shellcheck)"; exit 1; }
+	@find scripts/sno-ip-change -type f -name "*.sh" -print0 | xargs -0 -n1 shellcheck -x || true
+
+ansible_lint:
+	ansible-lint ansible_files/
+
+ci_ansible_lint:
+	HOME=$(ROOT_DIR) ansible-lint ansible_files/
+
+pre-commit:
+	# TODO not identifying all pep8 violation - WIP
+	mkdir -p build
+	pre-commit run --files ./src/assisted_test_infra/test_infra/* ./src/tests/*
+
+_reformat:
+	black . --line-length=120
+	isort . --profile=black --line-length=120
+
+flake8:
+	skipper make _flake8
+
+_flake8:
+	flake8 $(FLAKE8_EXTRA_PARAMS) . || (tput setaf 3; echo "If you keep seeing this error[s] try to make reformat"; tput sgr0; exit 1)
+
+reformat:
+	FLAKE8_EXTRA_PARAMS="$(FLAKE8_EXTRA_PARAMS)" skipper make _reformat
 
 test:
+	$(MAKE) start_load_balancer START_LOAD_BALANCER=true
 	skipper make $(SKIPPER_PARAMS) _test
 
 _test: $(REPORTS) _test_setup
-	python3 -m pytest $(or ${TEST},discovery-infra/tests) -k $(or ${TEST_FUNC},'') -m $(or ${TEST_MARKER},'') --verbose -s --junit-xml=$(REPORTS)/unittest.xml
+	JUNIT_REPORT_DIR=$(REPORTS) python3 ${DEBUG_FLAGS} -m pytest $(PYTEST_FLAGS) $(or ${TEST},src/tests) -k $(or ${TEST_FUNC},'') -m $(or ${TEST_MARKER},'') --verbose -s --junit-xml=$(PYTEST_JUNIT_FILE)
 
 test_parallel:
+	$(MAKE) start_load_balancer START_LOAD_BALANCER=true
 	skipper make $(SKIPPER_PARAMS) _test_parallel
+	scripts/assisted_deployment.sh set_all_vips_dns
 
 _test_setup:
-	rm -rf /tmp/assisted_test_infra_logs
-	mkdir /tmp/assisted_test_infra_logs
-	rm -rf /tmp/test_images
-	cp -p discovery-infra/test_infra/tools/tf_network_pool.json /tmp/tf_network_pool.json
+	@if [ "$(TEST_TEARDOWN)" != "false" ]; then \
+		rm -rf /tmp/assisted_test_infra_logs; \
+		rm -rf /tmp/test_images; \
+		rm -f /tmp/tf_network_pool.json; \
+	fi
+	mkdir -p /tmp/assisted_test_infra_logs
 
 _test_parallel: $(REPORTS) _test_setup
-	python3 -m pytest -n $(or ${TEST_WORKERS_NUM}, '2') $(or ${TEST},discovery-infra/tests) -k $(or ${TEST_FUNC},'') -m $(or ${TEST_MARKER},'') --verbose -s --junit-xml=$(REPORTS)/unittest.xml
+	JUNIT_REPORT_DIR=$(REPORTS) python3 -m pytest $(PYTEST_FLAGS) -n $(or ${TEST_WORKERS_NUM}, '3') $(or ${TEST},src/tests) -k $(or ${TEST_FUNC},'') -m $(or ${TEST_MARKER},'') --verbose -s --junit-xml=$(PYTEST_JUNIT_FILE)
+
+#########
+# Tests #
+#########
+test_kube_api_parallel:
+	TEST=./src/tests/test_kube_api.py make test_parallel
+
+cli:
+	$(MAKE) start_load_balancer START_LOAD_BALANCER=true
+	TEST_TEARDOWN=false JUNIT_REPORT_DIR=$(REPORTS) LOGGING_LEVEL="error" skipper run -i "python3 ${DEBUG_FLAGS} -m src.cli"
+
+validate_client:
+	skipper run "python3 ${DEBUG_FLAGS} src/service_client/client_validator.py"
+
+generate_python_client: bring_assisted_service
+	cd assisted-service && skipper make generate-python-client
+	rm -rf ./.pip && mkdir ./.pip && mv assisted-service/build/assisted-installer/assisted-service-client/dist/*.whl ./.pip/
+
+test_ctlplane_scaleup:
+	TEST_TEARDOWN=false TEST=./src/tests/test_ctlplane_scaleup.py TEST_FUNC=test_ctlplane_scaleup $(MAKE) test
+
+install_k8s_api:
+	TEST_TEARDOWN=false TEST=./src/tests/test_kube_api.py TEST_FUNC=test_kubeapi $(MAKE) test
+
+destroy_crs:
+	oc delete cd --all-namespaces --all
+	oc delete aci --all-namespaces --all
+	oc delete infraenv --all-namespaces --all
+	oc delete agents --all-namespaces --all

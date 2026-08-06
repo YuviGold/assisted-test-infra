@@ -1,0 +1,165 @@
+//////
+// vSphere variables
+//////
+
+variable "vsphere_server" {
+  type        = string
+  description = "vSphere vcenter server ip address or fqdn (vCenter server name for vSphere API operations)"
+}
+
+variable "vsphere_username" {
+  type        = string
+  description = "vSphere vcenter server username"
+}
+
+variable "vsphere_password" {
+  type        = string
+  description = "vSphere vcenter server password"
+}
+
+variable "vsphere_cluster" {
+  type        = string
+  description = "vSphere cluster name, vsphere cluster is a cluster of hosts that it manages"
+}
+
+variable "vsphere_datacenter" {
+  type        = string
+  description = "vSphere data center name"
+}
+
+variable "vsphere_datastore" {
+  type        = string
+  description = "vSphere data store name"
+}
+
+variable "vsphere_network" {
+  type        = string
+  description = "vSphere publicly accessible network for cluster ingress and access. e.g VM Network"
+}
+
+variable "vsphere_parent_folder" {
+  type        = string
+  default     = "assisted-test-infra"
+  description = <<EOF
+  Grouping resources together.
+There should be a difference between CI and a manually installed cluster for better management.
+Periodically deleting long-lived CI machines (for example)
+It should be a preexisting folder
+EOF
+}
+
+variable "vsphere_folder" {
+  type        = string
+  description = <<EOF
+  This folder groups the current Openshift cluster vms.
+  Terraform creates this folder, and if it already exists, it fails.
+  Default to cluster_name.
+EOF
+  default     = ""
+}
+
+///////////
+// Test infra variables
+///////////
+
+
+variable "cluster_name" {
+  type        = string
+  description = <<EOF
+AI cluster name
+All the resources will be located under a folder with this name
+and tagged with the cluster name
+The resources should be associate with this name for easy recognition.
+EOF
+}
+
+variable "iso_download_path" {
+  type        = string
+  description = "The ISO path (We have to upload this file to the vsphere)"
+  default     = ""
+}
+
+///////////
+// Control Plane machine variables
+///////////
+
+variable "masters_count" {
+  type        = string
+  default     = "3"
+  description = "The number of master nodes to be created."
+}
+
+variable "master_disk_count" {
+  type        = number
+  description = "Number of master disks."
+}
+
+variable "master_memory" {
+  type        = number
+  default     = 16384
+  description = "The size of the master's virtual machine's memory, in MB"
+}
+
+variable "master_disk_size_gib" {
+  type        = number
+  default     = 120
+  description = "The size of the master's disk, in GB"
+}
+
+variable "worker_disk_count" {
+  type        = number
+  description = "Number of worker disks."
+}
+
+variable "master_vcpu" {
+  type        = number
+  default     = 4
+  description = "The total number of virtual processor cores to assign to the master virtual machine."
+}
+
+variable "workers_count" {
+  type        = string
+  default     = "2"
+  description = "The number of worker nodes to be created."
+}
+
+variable "worker_memory" {
+  type        = number
+  default     = 16384
+  description = "The size of the worker's virtual machine's memory, in MB"
+}
+
+variable "worker_disk_size_gib" {
+  type        = number
+  default     = 120
+  description = "The size of the worker's disk, in GB"
+}
+
+variable "worker_vcpu" {
+  type        = number
+  default     = 4
+  description = "The total number of virtual processor cores to assign to the master virtual machine."
+}
+
+
+variable "vsphere_resource_pool" {
+  type        = string
+  default     = ""
+  description = "vSphere resource pool name under the compute cluster. If empty, uses the cluster's default resource pool."
+}
+
+variable "vsphere_disk_uuid_enabled" {
+  type        = bool
+  default     = true
+  description = "Enable disk UUID on virtual machines. Required for vSphere CSI driver and validated by the Assisted Installer."
+}
+
+variable "vsphere_control_plane_cores_per_socket" {
+  type        = number
+  default     = 1
+  description = <<EOF
+The number of cores per socket(cpu) in this virtual machine.
+The number of vCPUs on the virtual machine will be num_cpus divided by num_cores_per_socket.
+If specified, the value supplied to num_cpus must be evenly divisible by this value. Default: 1
+EOF
+}

@@ -2,10 +2,23 @@ build
 assisted-service
 .idea
 .vscode
-.terraform
 reports/
 *__pycache__*
 minikube
 *.log
 **/RCS/**
 *~
+.env
+capi
+sno-bootstrap-manifests
+.pip/
+**/UNKNOWN.egg-info
+# terraform
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+.terraform
+**/cloud-config.yaml
+custom_manifests/
+venv
+

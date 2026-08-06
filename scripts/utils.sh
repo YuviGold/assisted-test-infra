@@ -13,8 +13,7 @@ function get_namespace_index() {
     if [[ -z $index ]]; then
         all_namespaces=$(skipper run python3 scripts/indexer.py --action list)
         echo "Maximum number of namespaces allowed are currently running: $all_namespaces"
-        echo "Please remove an old namespace in order to create a new one, run:"
-        echo "make delete_minikube_profile NAMESPACE=<namespace>"
+        echo "Please remove an old namespace in order to create a new one"
         exit 1
     fi
 
@@ -35,34 +34,42 @@ function spawn_port_forwarding_command() {
     external_port=$2
     namespace=$3
     namespace_index=$4
-    profile=$5
-    kubeconfig=$6
-    target=$7
-    ip=${8:-""}
-    port=${9:-""}
+    kubeconfig=$5
+    target=$6
+    ip=${7:-""}
+    port=${8:-""}
+    socket_name="forward-${service_name}-${external_port}"
+    service_file="/etc/systemd/system/${socket_name}.service"
 
-    filename=${service_name}__${namespace}__${namespace_index}__${external_port}__assisted_installer
     if [ "$target" = "minikube" ]; then
-        ip=$(minikube -p $profile ip)
-        port=$(kubectl --server $(get_profile_url $profile) --kubeconfig=$kubeconfig get svc/${service_name} -n ${NAMESPACE} -o=jsonpath='{.spec.ports[0].nodePort}')
+        ip=$(kubectl --kubeconfig="$kubeconfig" get nodes -o=jsonpath='{.items[0].status.addresses[0].address}')
+        if [ -z "$port" ]; then
+            port=$(kubectl --kubeconfig="$kubeconfig" get svc/"${service_name}" -n "${namespace}" -o=jsonpath='{.spec.ports[0].nodePort}')
+        else
+            port=$(kubectl --kubeconfig="$kubeconfig" get svc/"${service_name}" -n "${namespace}" -o=jsonpath="{.spec.ports[?(@.port==$port)].nodePort}")
+        fi
     fi
-    cat <<EOF >build/xinetd-$filename
-service ${service_name}
-{
-  type		= UNLISTED
-  socket_type	= stream
-  protocol	= tcp
-  user		= root
-  wait		= no
-  redirect	= $ip $port
-  port		= ${external_port}
-  per_source	= UNLIMITED
-  instances	= UNLIMITED
-}
+
+    cat <<EOF | sudo tee "${service_file}"
+[Unit]
+Description=Forwarding instance to Minikube ${service_name}
+
+[Service]
+Type=simple
+StandardOutput=syslog
+StandardError=syslog
+
+[Service]
+ExecStart=/usr/bin/socat TCP-LISTEN:${external_port},reuseaddr,fork TCP:${ip}:${port}
+
+[Install]
+WantedBy=multi-user.target
 EOF
-    sudo mv build/xinetd-$filename /etc/xinetd.d/$filename --force
-    sudo systemctl restart xinetd
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now "${service_file}"
 }
+
 
 function run_in_background() {
     bash -c "nohup $1  >/dev/null 2>&1 &"
@@ -70,13 +77,30 @@ function run_in_background() {
 
 function kill_port_forwardings() {
     services=$1
-    sudo systemctl stop xinetd
-    for s in $services; do
-        for f in $(sudo ls /etc/xinetd.d/ | grep $s); do
-            sudo rm -f /etc/xinetd.d/$f
+
+    for service_name in $services; do
+        for service_file in $(ls /etc/systemd/system/forward-${service_name}-*.service 2>/dev/null); do
+            service_base_name=$(basename "$service_file")
+            sudo systemctl disable --now "service_base_name"
+            sudo rm -f "/etc/systemd/system/$service_file"
         done
     done
+
+    sudo systemctl daemon-reload
 }
+
+function delete_all_port_forwarding() {
+    for service_file in $(ls /etc/systemd/system/forward-*.service 2>/dev/null); do
+            sudo systemctl stop forward-*
+            service_base_name=$(basename "$service_file" | cut -d"." -f1)
+            echo "deleting service $service_base_name"
+            sudo systemctl disable "service_base_name" 2>/dev/null
+            sudo rm -f "$service_file"
+    done
+    
+    sudo systemctl daemon-reload
+}
+
 
 function get_main_ip() {
     echo "$(ip route get 1 | sed 's/^.*src \([^ ]*\).*$/\1/;q')"
@@ -87,40 +111,52 @@ function get_main_ip_v6() {
 }
 
 function wait_for_url_and_run() {
-    RETRIES=15
+    URL="$1"
+    FUNCTION="$2"
+    RETRIES=30
     RETRIES=$((RETRIES))
-    STATUS=1
-    url_reachable "$1" && STATUS=$? || STATUS=$?
 
-    until [ $RETRIES -eq 0 ] || [ $STATUS -eq 0 ]; do
-
+    until [ $RETRIES -eq 0 ]; do
         RETRIES=$((RETRIES - 1))
 
         echo "Running given function"
-        $2
-
-        echo "Sleeping for 30 seconds"
-        sleep 30s
+        ${FUNCTION}
 
         echo "Verifying URL and port are accessible"
-        url_reachable "$1" && STATUS=$? || STATUS=$?
+        if url_reachable "${URL}"; then
+          echo "URL ${URL} is reachable!"
+          return
+        fi
+
+        echo "Sleeping for 2 seconds"
+        sleep 2s
     done
-    if [ $RETRIES -eq 0 ]; then
-        echo "Timeout reached, URL $1 not reachable"
-        exit 1
-    fi
+
+    echo "Timeout reached, URL ${URL} is not reachable"
+    exit 1
 }
 
 function close_external_ports() {
+    export PLATFORM=${PLATFORM:-}
     ports=$1
+    
     for p in $ports; do
         sudo firewall-cmd --zone=public --remove-port=$p/tcp
+        if [[ "${PLATFORM}" == "none"  || "${PLATFORM}" == "external" ]]; then
+            sudo firewall-cmd --policy=libvirt-to-host --remove-port=$p/tcp
+        fi
     done
 }
 
 function add_firewalld_port() {
     port=$1
-    if [ "${EXTERNAL_PORT}" = "y" ]; then
+    export PLATFORM=${PLATFORM:-}
+
+    if [[ "${PLATFORM}" == "none"  || "${PLATFORM}" == "external" ]]; then
+        sudo firewall-cmd --policy=libvirt-to-host --add-port=$port/tcp
+    fi
+
+    if $EXTERNAL_PORT; then
         echo "configuring external ports"
         sudo firewall-cmd --zone=public --add-port=$port/tcp
     fi
@@ -146,11 +182,6 @@ function as_singleton() {
     $func
 }
 
-function get_profile_url() {
-    profile=$1
-    echo https://$(minikube ip --profile $profile):8443
-}
-
 
 function validate_namespace() {
     namespace=$1
@@ -162,33 +193,97 @@ function validate_namespace() {
     exit 1
 }
 
-function get_profile_url() {
-    profile=$1
-    echo https://$(minikube ip --profile $profile):8443
+function running_from_skipper() {
+   # The SKIPPER_UID environment variable is an indication that we are running on a skipper container.
+   [ -n "${SKIPPER_UID+x}" ]
 }
 
-function local_setup_before_deployment() {
-    platform=$1
-    ns=$2
-    oc_flag=${3:-}
-    if [[ ${platform,,} == "none" ]]; then
-        configure_none_platform_iptables_rules $ns $oc_flag
+function get_container_runtime_command() {
+  # if CONTAINER_TOOL is defined skipping
+  if [ -z "${CONTAINER_TOOL+x}" ]; then
+    if running_from_skipper; then
+      if [ -z ${CONTAINER_RUNTIME_COMMAND+x} ]; then
+        echo "CONTAINER_RUNTIME_COMMAND doesn't set on old skipper version -> default to podman. Upgrade your skipper to the latest version" 1>&2;
+      fi
+
+      if [ "${CONTAINER_RUNTIME_COMMAND:-podman}" = "docker" ]; then
+        CONTAINER_TOOL="docker"
+      else
+        CONTAINER_TOOL=$( command -v podman &> /dev/null && echo "podman" || echo "podman-remote")
+      fi
+    else
+      # The Docker command could be an alias for podman, so check first for podman
+      # Fallback to Docker if podman is not available
+      # In the absence of a container tool installed on the system, default to podman as we will install it during setup.
+      CONTAINER_TOOL=$( command -v podman &> /dev/null && echo "podman" || (command -v docker &> /dev/null && echo "docker" || echo "podman"))
     fi
+  fi
+
+  echo $CONTAINER_TOOL
 }
 
-function configure_none_platform_iptables_rules() {
-    ns=$1
-    oc_flag=${2:-}
-    ns_index=$(get_namespace_index $ns $oc_flag)
-    network=192.168.$(( 126 + $ns_index )).0/24
-    sec_network=192.168.$(( 126 + $ns_index + 15 )).0/24
-    echo "Configuring routing rules for $network and $sec_network"
-    iptables -I FORWARD -i virbr141 -o virbr126 -j ACCEPT
-    iptables -I FORWARD -i virbr126 -o virbr141 -j ACCEPT
-    ip=$(ip route get 1 | sed -n 's/^.*src \([0-9.]*\) .*$/\1/p')
-    iptables -t nat -A POSTROUTING ! -d 192.168.0.0/16 -j SNAT --source $network --to-source $ip
-    iptables -t nat -A POSTROUTING ! -d 192.168.0.0/16 -j SNAT --source $sec_network --to-source $ip
+# podman-remote4 cannot run against podman server 3 so the skipper image contains them both
+# here we select the right podman-remote version
+function select_podman_client() {
+  # already linked
+  if command -v podman-remote &> /dev/null; then
+    exit
+  fi
+
+  if [ "$(get_container_runtime_command)" = "podman-remote" ]; then
+    if podman-remote4 info 2>&1 | grep "server API version is too old" &> /dev/null; then
+      echo "using podman-remote version 3"
+      ln $(which podman-remote3) /tools/podman-remote
+    else
+      echo "using podman-remote version 4"
+      ln $(which podman-remote4) /tools/podman-remote
+    fi
+  fi
 }
 
+function retry() {
+    attempts=5
+    interval=1
 
-"$@"
+    local OPTIND
+    while getopts "a:i:" opt ; do
+      case "${opt}" in
+          a )
+              attempts="${OPTARG}"
+              ;;
+          i )
+              interval="${OPTARG}"
+              ;;
+          * )
+              ;;
+      esac
+    done
+    shift $((OPTIND-1))
+
+    rc=0
+    for attempt in $(seq "${attempts}")
+    do
+        echo "Attempt ${attempt}/${attempts} to execute \"$*\"..."
+
+        if "$@"; then
+            return 0
+        else
+            rc=$?
+            echo "Failed with exit code ${rc}, retrying \"$*\"..."
+            sleep "${interval}"
+        fi
+    done
+
+    return ${rc}
+}
+
+function get_pods_with_label() {
+    local pod_label=$1
+    local namespace=$2
+
+    kubectl get pods -n $namespace -l $pod_label -o name
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    "$@"
+fi

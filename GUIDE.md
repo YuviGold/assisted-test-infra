@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-1. Install CentOS8/RHEL8 on the assisted installer host<sup id="a1">[1](#f1)</sup>
+1. Only usage of CentOS8 / RHEL8 / Rocky8 / AlmaLinux on the assisted installer host<sup id="a1">[1](#f1)</sup> is supported
    - This host will run minikube and the UI for deploying OpenShift on Bare Metal
 1. Setup DHCP/DNS records for the following OpenShift nodes and VIPs. List includes
    - Master nodes
@@ -11,7 +11,7 @@
    - Ingress VIP
      > NOTE: dnsmasq can be used to setup [DHCP](https://openshift-kni.github.io/baremetal-deploy/4.4/Deployment.html#creating-dhcp-reservations-using-dnsmasq-option2_ipi-install-prerequisites) and [DNS](https://openshift-kni.github.io/baremetal-deploy/4.4/Deployment.html#creating-dns-records-using-dnsmasq-option2_ipi-install-prerequisites). Out of scope for this document but I've included links on how to do it.
 1. Ensure these values are properly set via `nslookup` and dig commands from your assisted installer host
-1. Download your Pull Secret from https://cloud.redhat.com/openshift/install/metal/user-provisioned
+1. Download your Pull Secret from https://console.redhat.com/openshift/install/pull-secret
 
 ## Deployment
 
@@ -19,34 +19,28 @@ Procedure
 
 As `$USER` user with `sudo` privileges,
 
-1.  Generate an SSH key if not already available (`ssh_key/key`)
+1.  Generate an SSH key if not already available (`~/.ssh/id_rsa`)
 
         [$USER@assisted_installer ~]# ssh-keygen -t rsa -f ~/.ssh/id_rsa -P ''
 
-1.  Install git and make on your assisted installer host if not already present. Note that repositories should be already configured and available on your system.
+1.  Make sure that git and make are installed in your host. Note that repositories should be already configured and available on your system.
 
         [$USER@assisted_installer ~]# dnf install -y make git
 
-1.  Create a directory under `~/` labeled `assisted-installer` and `git clone` the `test-infra` git repository
+1.  Clone the `assisted-test-infra` git repository:
 
-        [$USER@assisted_installer ~]# mkdir ~/assisted-installer
-        [$USER@assisted installer assisted-installer]# cd ~/assisted-installer/
         [$USER@assisted_installer assisted-installer]# git clone https://github.com/openshift/assisted-test-infra
         [$USER@assisted_installer assisted-installer]# cd assisted-test-infra
 
-1.  Setup the assisted installer's environment by running the `install_environment.sh` script
+1.  Setup the assisted installer's environment by running the `setup` target:
 
-        [$USER@assisted_installer assisted-test-infra]# ./scripts/install_environment.sh
+        [$USER@assisted_installer assisted-test-infra]# make setup
 
-1.  Once complete, run the `create_full_environment` using `make`
+1.  **(Optional)** Currently the Installer defaults to deploying OpenShift 4.9. If you wish to change this value, set `OPENSHIFT_VERSION` to a different value, e.g. 4.8, 4.10
 
-        [$USER@assisted_installer assisted-test-infra]# make create_full_environment
+        [$USER@assisted_installer assisted-test-infra]# export OPENSHIFT_VERSION=4.10
 
-1.  **(Optional)** Currently the Installer defaults to deploying OpenShift 4.6. If you wish to change this value, set `OPENSHIFT_VERSION` to a different value, e.g. 4.7
-
-        [$USER@assisted_installer assisted-test-infra]# export OPENSHIFT_VERSION=4.6
-
-1.  Once complete, run the "run" using make that creates the `assisted-service` and deploys the UI
+1.  Once complete, use the `run` makefile target that deploys all assisted-installer parts (both UI and API):
 
         [$USER@assisted_installer assisted-test-infra]# make run
         .
@@ -63,7 +57,7 @@ As `$USER` user with `sudo` privileges,
 
 1. A popup window labeled `New Bare Metal OpenShift Cluster` opens and requests a Cluster Name and OpenShift Version. Enter an appropriate Cluster Name.
 
-   > NOTE: The OpenShift Version selected is the value assigned to `OPENSHIFT_VERSION` (defaults to 4.6)
+   > NOTE: The OpenShift Version selected is the value assigned to `OPENSHIFT_VERSION`. If not set, then it uses the default provided by the assisted-service.
 
 1. On the next screen, enter the **Base DNS Domain**, **Pull Secret**, and **SSH Public Key**. Once complete, click on the button **Validate & Save Changes**.
 
@@ -86,7 +80,7 @@ As `$USER` user with `sudo` privileges,
     > NOTE: This example installs ISO on the assisted installer host that will serve out the ISO via HTTP for the OpenShift cluster nodes.
 
         [$USER@assisted_installer ~]# mkdir ~/assisted-installer/images
-        [$USER@assisted_installer ~]# wget http://$(hostname):6008/api/assisted-install/v1/clusters/<cluster-id>/downloads/image -O ~/assisted-installer/images/live.iso
+        [$USER@assisted_installer ~]# wget http://$(hostname):6008/api/assisted-install/v2/clusters/<cluster-id>/downloads/image -O ~/assisted-installer/images/live.iso
 
     > NOTE: When the ISO starts the initial download the cluster ID will show up on your browser address bar. Use that value and replace `<cluster-id>` with it.
 
@@ -131,7 +125,7 @@ As `$USER` user with `sudo` privileges,
 
         sshpass -p '*****' ssh root@<iDRAC-IP> racadm remoteimage -d
 
-1.  The `live.iso` should reboot the nodes and boot them into a Fedora Live image. Once it has done this, shortly you will notice the nodes becoming discoverable for your cluster via the `http://<host-ip>:6008/clusters/<cluster-id>` dashboard.
+1.  The `live.iso` should reboot the nodes and boot them into an RHCOS Live image. Once it has done this, shortly you will notice the nodes becoming discoverable for your cluster via the `http://<host-ip>:6008/clusters/<cluster-id>` dashboard.
 
 1.  Once the nodes are now available on the dashboard, select the appropriate role for each OpenShift cluster node.
 
@@ -161,6 +155,34 @@ As `$USER` user with `sudo` privileges,
 
 > NOTE: Currently there is an issue with the metal3 pod. The Assisted Installer team is aware of this.
 
+## Adding a new e2e flow
+
+- Before starting, note that test infra is written in python (>= 3.9) and uses [pytest](https://docs.pytest.org/en/6.2.x/contents.html) and [pytest fixtures](https://docs.pytest.org/en/6.2.x/fixture.html) for running all of our e2e test flows.
+- Set up test-infra test environment ([assisted-installer-install-guide](GUIDE.md#assisted-installer-unofficial-install-guide))
+- Make sure that the assisted-service is supporting the tested feature
+  - For customizing tested components, take a look at [components deployment parameters](README.md#components)
+  - The changes are already on assisted-service master branch
+- Make sure to test the changes for both CI-compatible distro (Rocky Linux 8) and QE's compatible environment (RHEL 8.5).
+- Depends on the test one or more of the following are needed:
+  1. Adding environment variables -
+     - [skipper.env](https://github.com/openshift/assisted-test-infra/blob/master/skipper.env) - All environment variables that are being used inside assisted-test-infra container must be declared on skipper env file.
+     - [env_defaults](https://github.com/openshift/assisted-test-infra/blob/master/src/tests/global_variables/env_variables_defaults.py) - Add the environment variables to the default file and set default if needed
+         * Note 1: Use only `env_defaults` to access environment variables. Do not access them directly using `os.environ` or some other method.
+         * Note 2: Do not set variable default values on the Makefile or on any other file.
+  1. Use one of the existing test functions (depends on the mode you are using) or create a new one:
+     - Some tests can be modified using only different environment variables (e.g. [test_install](https://github.com/openshift/assisted-test-infra/blob/master/src/tests/test_e2e_install.py#L12), [test_kubeapi](https://github.com/openshift/assisted-test-infra/blob/master/src/tests/test_kube_api.py#L49))
+     - After you have ruled out the option to customize an existing test using environment variables only, you can add a new test function (just look on some examples under the [tests](https://github.com/openshift/assisted-test-infra/tree/master/src/tests) package) to one of the existing test files or create a new one if needed.
+  1. [Node controllers](https://github.com/openshift/assisted-test-infra/tree/master/src/assisted_test_infra/test_infra/controllers/node_controllers):
+     - Alter or create any node controller depends on which platform the test is running on (e.g. [terraform_controller](https://github.com/openshift/assisted-test-infra/blob/master/src/assisted_test_infra/test_infra/controllers/node_controllers/terraform_controller.py), [vsphere_controller](https://github.com/openshift/assisted-test-infra/blob/master/src/assisted_test_infra/test_infra/controllers/node_controllers/vsphere_controller.py), [libvirt_controller](https://github.com/openshift/assisted-test-infra/blob/master/src/assisted_test_infra/test_infra/controllers/node_controllers/libvirt_controller.py))
+     - Any new node controller must have its own implementation of [BaseNodeConfig](https://github.com/openshift/assisted-test-infra/blob/master/src/assisted_test_infra/test_infra/helper_classes/config/controller_config.py). The defaults values are taken directly from the env_defaults mentioned above.
+     - The most heavily-used `NodeController` is the `TerraformController` (inherits from `LibvirtController`), so unless adding a new platform or specific platform test, you probably will have to alter one of those two controllers.
+  1. General Purpose Controllers - Running extra services alongside the test (e.g. [ProxyController](https://github.com/openshift/assisted-test-infra/tree/master/src/assisted_test_infra/test_infra/controllers/proxy_controller) on IPv6) are often requires a new controller, if it can be done, run it as an isolated container. You probably will want to declare a new pytest-fixture for creating and destroying it properly.
+  1. [Triggers](https://github.com/openshift/assisted-test-infra/tree/master/src/triggers) - Mechanism for automatic assignment of variables:
+     - On some scenarios we will need to set multiple environment variables for single test (e.g. [SNO](https://github.com/openshift/assisted-test-infra/blob/master/src/triggers/default_triggers.py#L22-#L31)), triggers are mechanism for automatically set environment variables when some condition is met (e.g. `masters_count=1`)
+     - The default triggers are defined [here](https://github.com/openshift/assisted-test-infra/blob/master/src/triggers/default_triggers.py)
+     - The condition for each trigger is defined using python lambda function.
+     - When trigger condition is met, it's setting the [global_variable](https://github.com/openshift/assisted-test-infra/blob/master/src/tests/config/global_configs.py#L17) instance value (if exists) and for each test configurations it's setting the variables as part of the [controller creation fixture](https://github.com/openshift/assisted-test-infra/blob/e474f28865837543346e1a55010f2d0318a06133/src/tests/base_test.py#L225)
+
 ## Troubleshooting
 
 Also see the [troubleshooting section](https://docs.google.com/document/d/1WDc5LQjNnqpznM9YFTGb9Bg1kqPVckgGepS4KBxGSqw/edit#heading=h.ewz6a9wqulbj) in the **internal** [Assisted Deployment](https://docs.google.com/document/d/1WDc5LQjNnqpznM9YFTGb9Bg1kqPVckgGepS4KBxGSqw/edit?usp=sharing) document.
@@ -183,7 +205,7 @@ make run
 
 **Problem**
 
-An exception in `discovery-infra/assisted_service_client.py` about a missing class or an invalid parameter.
+An exception in `src/assisted_service_client.py` about a missing class or an invalid parameter.
 
 **Solution**
 
@@ -212,9 +234,7 @@ VMs fail to connect to Assisted Service.
 
    - Get the VM IP addresses using `virsh net-dhcp-leases test-infra-net`.
 
-   - `cd test-infra` and `chmod 600 ssh_key/key` (default SSH key)
-
-   - `ssh -i ssh_key/key core@vm-ip` or try `ssh -i ssh_key/key systemuser@vm-ip` if it did not work
+   - `ssh core@vm-ip` or try `ssh systemuser@vm-ip` if it did not work
 
    - Agent logs are located under `/var/log/agent.log`
 
@@ -250,7 +270,7 @@ The test infra fails with any of the following errors:
 
 **Solution**
 
-Do not run test-infra from `/root`. Instead, move it to `/home/test/` and then run `make create_full_environment`.
+Do not run test-infra from `/root`. Instead, move it to `/home/test/` and then run `make setup`.
 
 ---
 
@@ -270,7 +290,17 @@ You get `Error: Error creating libvirt domain: virError(Code=38, Domain=18, Mess
 
 **Solution**
 
-Run `make create_full_environment`.
+Run `make setup`.
 
 <hr>
 <b id="f1">1</b> It can also be a VM running CentOS8 or RHEL8 and able to do `nested` virtualization as it will run minikube inside. VM should have NICs for connecting to the hosts being installed over bridges at the physical host. [↩](#a1)
+
+---
+
+**Problem**
+
+You get `Error: Operation not supported: can't update 'bridge' section of network 'test-infra-net-******'`.
+
+**Solution**
+
+Downgrade libvirt: Run `dnf downgrade libvirt -y`.

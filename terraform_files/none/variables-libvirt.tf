@@ -19,13 +19,13 @@ variable "cluster_domain" {
 }
 
 variable "machine_cidr_addresses" {
-    type = list(string)
-    description = "Addresses for machine CIDR network"
+  type        = list(string)
+  description = "Addresses for machine CIDR network"
 }
 
 variable "provisioning_cidr_addresses" {
-    type = list(string)
-    description = "Addresses for provisioning CIDR network"
+  type        = list(string)
+  description = "Addresses for provisioning CIDR network"
 }
 
 variable "libvirt_uri" {
@@ -68,6 +68,11 @@ variable "libvirt_secondary_master_ips" {
   description = "the list of desired master second interface ips. Must match master_count"
 }
 
+variable "libvirt_master_macs" {
+  type        = list(string)
+  description = "the list of the desired macs for master interface"
+}
+
 variable "libvirt_worker_ips" {
   type        = list(list(string))
   description = "the list of desired worker ips. Must match master_count"
@@ -78,9 +83,14 @@ variable "libvirt_secondary_worker_ips" {
   description = "the list of desired worker second interface ips. Must match master_count"
 }
 
-variable "api_vip" {
-  type        = string
-  description = "the API virtual IP"
+variable "libvirt_worker_macs" {
+  type        = list(string)
+  description = "the list of the desired macs for worker interface"
+}
+
+variable "api_vips" {
+  type        = list(string)
+  description = "the API virtual IPs"
 }
 
 # It's definitely recommended to bump this if you can.
@@ -114,7 +124,12 @@ variable "libvirt_worker_memory" {
 
 variable "image_path" {
   type        = string
-  description = "image type"
+  description = "image path"
+}
+
+variable "worker_image_path" {
+  type        = string
+  description = "worker image path"
 }
 
 variable "libvirt_storage_pool_path" {
@@ -122,6 +137,17 @@ variable "libvirt_storage_pool_path" {
   description = "storage pool path"
 }
 
+variable "master_disk_count" {
+  type        = number
+  description = "Number of master disks."
+  default     = "1"
+}
+
+variable "worker_disk_count" {
+  type        = number
+  description = "Number of worker disks."
+  default     = "1"
+}
 
 variable "libvirt_worker_disk" {
   type        = string
@@ -141,18 +167,38 @@ variable "running" {
   default     = true
 }
 
-variable "cluster_inventory_id" {
-  type      = string
-}
-
 variable "load_balancer_ip" {
-  type = string
+  type        = string
   description = "IP address for load balancer"
-  default = ""
+  default     = ""
 }
 
 variable "load_balancer_config_file" {
-  type = string
+  type        = string
   description = "Contents of load balancer configuration file"
-  default = ""
+  default     = ""
+}
+
+variable "master_vtpm2" {
+  type        = bool
+  description = "Whether or not to emulate TPM v2 device on master nodes."
+  default     = false
+}
+
+variable "worker_vtpm2" {
+  type        = bool
+  description = "Whether or not to emulate TPM v2 device on worker nodes."
+  default     = false
+}
+
+variable "uefi_boot_firmware" {
+  type        = string
+  description = "Path to UEFI firmware file (e.g., /usr/share/OVMF/OVMF_CODE.fd)"
+  default     = ""
+}
+
+variable "uefi_boot_template" {
+  type        = string
+  description = "Path to UEFI NVRAM template file (e.g., /usr/share/OVMF/OVMF_VARS.fd)"
+  default     = ""
 }

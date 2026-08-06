@@ -13,19 +13,54 @@ variable "worker_count" {
   description = "Number of workers."
 }
 
+variable "arbiter_count" {
+  type        = number
+  description = "Number of arbiters."
+}
+
+variable "master_disk_count" {
+  type        = number
+  description = "Number of master disks."
+}
+
+variable "worker_disk_count" {
+  type        = number
+  description = "Number of worker disks."
+}
+
+variable "arbiter_disk_count" {
+  type        = number
+  description = "Number of arbiter disks."
+}
+
+variable "master_boot_devices" {
+  type        = list(string)
+  description = "the list of boot devices in the desired order of boot for masters"
+}
+
+variable "worker_boot_devices" {
+  type        = list(string)
+  description = "the list of boot devices in the desired order of boot for workers"
+}
+
+variable "arbiter_boot_devices" {
+  type        = list(string)
+  description = "the list of boot devices in the desired order of boot for arbiters"
+}
+
 variable "cluster_domain" {
   type        = string
   description = "Cluster domain"
 }
 
 variable "machine_cidr_addresses" {
-    type = list(string)
-    description = "Addresses for machine CIDR network"
+  type        = list(string)
+  description = "Addresses for machine CIDR network"
 }
 
 variable "provisioning_cidr_addresses" {
-    type = list(string)
-    description = "Addresses for provisioning CIDR network"
+  type        = list(string)
+  description = "Addresses for provisioning CIDR network"
 }
 
 variable "libvirt_uri" {
@@ -98,9 +133,34 @@ variable "libvirt_secondary_worker_macs" {
   description = "the list of the desired macs for secondary worker interface"
 }
 
-variable "api_vip" {
-  type        = string
-  description = "the API virtual IP"
+variable "libvirt_arbiter_ips" {
+  type        = list(list(string))
+  description = "the list of desired arbiter ips. Must match master_count"
+}
+
+variable "libvirt_secondary_arbiter_ips" {
+  type        = list(list(string))
+  description = "the list of desired arbiter second interface ips. Must match master_count"
+}
+
+variable "libvirt_arbiter_macs" {
+  type        = list(string)
+  description = "the list of the desired macs for arbiter interface"
+}
+
+variable "libvirt_secondary_arbiter_macs" {
+  type        = list(string)
+  description = "the list of the desired macs for secondary arbiter interface"
+}
+
+variable "api_vips" {
+  type        = list(string)
+  description = "the API virtual IPs"
+}
+
+variable "ingress_vips" {
+  type        = list(string)
+  description = "the Ingress virtual IPs"
 }
 
 # It's definitely recommended to bump this if you can.
@@ -119,6 +179,18 @@ variable "libvirt_master_vcpu" {
   default     = "4"
 }
 
+variable "master_cpu_mode" {
+  type        = string
+  description = "CPUs virtualization flag"
+  default     = "host-passthrough"
+}
+
+variable "worker_cpu_mode" {
+  type        = string
+  description = "CPUs virtualization flag"
+  default     = "host-passthrough"
+}
+
 variable "libvirt_worker_vcpu" {
   type        = string
   description = "CPUs allocated to workers"
@@ -131,10 +203,33 @@ variable "libvirt_worker_memory" {
   default     = "4096"
 }
 
+variable "arbiter_cpu_mode" {
+  type        = string
+  description = "CPUs virtualization flag"
+  default     = "host-passthrough"
+}
+
+variable "libvirt_arbiter_vcpu" {
+  type        = string
+  description = "CPUs allocated to arbiters"
+  default     = "2"
+}
+
+variable "libvirt_arbiter_memory" {
+  type        = string
+  description = "RAM in MiB allocated to arbiter"
+  default     = "4096"
+}
+
 
 variable "image_path" {
   type        = string
-  description = "image type"
+  description = "image path"
+}
+
+variable "worker_image_path" {
+  type        = string
+  description = "worker image path"
 }
 
 variable "libvirt_storage_pool_path" {
@@ -155,14 +250,34 @@ variable "libvirt_master_disk" {
   default     = "21474836480"
 }
 
+variable "libvirt_arbiter_disk" {
+  type        = string
+  description = "Disk size in bytes allocated to arbiter"
+  default     = "21474836480"
+}
+
 variable "running" {
   type        = bool
   description = "Power on vms or not"
   default     = true
 }
 
-variable "cluster_inventory_id" {
-  type      = string
+variable "master_vtpm2" {
+  type        = bool
+  description = "Whether or not to emulate TPM v2 device on master nodes."
+  default     = false
+}
+
+variable "worker_vtpm2" {
+  type        = bool
+  description = "Whether or not to emulate TPM v2 device on worker nodes."
+  default     = false
+}
+
+variable "arbiter_vtpm2" {
+  type        = bool
+  description = "Whether or not to emulate TPM v2 device on arbiter nodes."
+  default     = false
 }
 
 variable "bootstrap_in_place" {
@@ -170,13 +285,104 @@ variable "bootstrap_in_place" {
   default = false
 }
 
-variable "static_macs" {
-  description = "If true, static macs are configured for the network interfaces"
-  type        = bool
-}
-
 variable "single_node_ip" {
   description = "IP address of single node.  Used for DNS"
-  type = string
-  default = ""
+  type        = string
+  default     = ""
+}
+
+variable "machine_cidr" {
+  description = "IPv4 network from network pool for automated tests"
+  type        = string
+  default     = ""
+}
+
+variable "machine_cidr6" {
+  description = "IPv6 network from network pool for automated tests"
+  type        = string
+  default     = ""
+}
+
+variable "provisioning_cidr" {
+  description = "IPv4 provisioning network from network pool for automated tests"
+  type        = string
+  default     = ""
+}
+
+variable "provisioning_cidr6" {
+  description = "IPv6 provisioning network from network pool for automated tests"
+  type        = string
+  default     = ""
+}
+
+variable "libvirt_dns_records" {
+  type        = map(string)
+  description = "DNS records to be added to the libvirt network"
+  default     = {}
+}
+
+variable "base_cluster_domain" {
+  type        = string
+  description = "Set base cluster domain. Defaults to <cluster_name>.<cluster_domain> if left unset."
+  default     = ""
+}
+
+variable "network_interfaces_count" {
+  type        = number
+  description = "the number of interfaces per network"
+  default     = 2
+}
+
+variable "slave_interfaces" {
+  type        = bool
+  description = "create interfaces as slaves.  do not assign to them mac and IP addresses"
+  default     = false
+}
+
+variable "enable_dhcp" {
+  type        = bool
+  description = "Disabling DHCP for static IP"
+  default = true
+}
+
+variable "load_balancer_config_file" {
+  type        = string
+  description = "Contents of load balancer configuration file"
+  default     = ""
+}
+
+variable "load_balancer_ip" {
+  type        = string
+  description = "IP address for load balancer"
+  default     = ""
+}
+
+variable "load_balancer_type" {
+  type        = string
+  description = "Set to `cluster-managed` if the load-balancer will be deployed by OpenShift, and `user-managed` if it will be deployed externally by the user."
+  default     = "cluster-managed"
+}
+
+variable "libvirt_load_balancer_net_name" {
+  type        = string
+  description = "The name of the load balancer network for user managed load balancer"
+  default     = "test-infra-load-balancer-net"
+}
+
+variable "libvirt_load_balancer_network_if" {
+  type        = string
+  description = "The name of the load balancer network interface"
+  default     = "lb"
+}
+
+variable "uefi_boot_firmware" {
+  type        = string
+  description = "Path to UEFI firmware file (e.g., /usr/share/OVMF/OVMF_CODE.fd)"
+  default     = ""
+}
+
+variable "uefi_boot_template" {
+  type        = string
+  description = "Path to UEFI NVRAM template file (e.g., /usr/share/OVMF/OVMF_VARS.fd)"
+  default     = ""
 }

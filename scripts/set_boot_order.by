@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 """
 This small script changes the boot order of a virsh guest domain.
@@ -8,10 +8,10 @@ the right boot order according to the arguments, and reboots the guest.
 
 import argparse
 import subprocess
-import time
 import sys
-from xml.dom import minidom
 import tempfile
+import time
+from xml.dom import minidom
 
 
 def get_args():
